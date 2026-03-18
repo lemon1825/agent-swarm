@@ -191,11 +191,31 @@ class ProofBundle:
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, ensure_ascii=False, default=str)
 
+    @staticmethod
+    def _coerce_tests(meta: Dict) -> Dict[str, int]:
+        tests = meta.get("tests", {}) or {}
+        return {
+            "run": int(tests.get("run", meta.get("tests_run", 0)) or 0),
+            "passed": int(tests.get("passed", meta.get("tests_passed", 0)) or 0),
+            "failed": int(tests.get("failed", meta.get("tests_failed", 0)) or 0),
+        }
+
+    @staticmethod
+    def _coerce_approval(meta: Dict) -> Dict[str, str]:
+        approval = meta.get("approval", {}) or {}
+        return {
+            "status": str(approval.get("status", meta.get("approval_status", "")) or ""),
+            "by": str(approval.get("by", meta.get("approved_by", "")) or ""),
+            "notes": str(approval.get("notes", meta.get("approval_notes", "")) or ""),
+        }
+
     @classmethod
     def from_result(cls, run_id: str, goal: str, result: Dict, trigger: str = "manual", trigger_ref: str = "") -> 'ProofBundle':
         """Create proof bundle from Swarm.run() result."""
         meta = result.get("metadata", {})
         results = result.get("results", {})
+        tests = cls._coerce_tests(meta)
+        approval = cls._coerce_approval(meta)
 
         completed = []
         failed = []
@@ -209,17 +229,28 @@ class ProofBundle:
                 entry["error"] = tr.error or "; ".join(tr.validation_failures)
                 failed.append(entry)
 
+        validation_summary = meta.get("validation_summary", "")
+        if not validation_summary and meta.get("errors"):
+            validation_summary = "; ".join(f"{k}: {v}" for k, v in meta["errors"].items())[:500]
+
         return cls(
             run_id=run_id, goal=goal,
             trigger=trigger, trigger_ref=trigger_ref,
             tasks_completed=completed, tasks_failed=failed,
+            files_changed=list(meta.get("files_changed", []) or []),
+            artifacts=list(meta.get("artifacts", []) or []),
+            tests_run=tests["run"], tests_passed=tests["passed"], tests_failed=tests["failed"],
+            validation_summary=validation_summary,
+            ontology_violations=[str(w) for w in meta.get("plan_quality", {}).get("ontology_warnings", [])],
+            approval_status=approval["status"], approved_by=approval["by"], approval_notes=approval["notes"],
             total_tokens=meta.get("total_tokens", 0),
             total_cost_usd=meta.get("budget_spent_usd", 0),
             execution_time_s=meta.get("execution_time_s", 0),
             llm_calls=meta.get("llm_calls_used", 0),
-            ontology_violations=[str(w) for w in meta.get("plan_quality", {}).get("ontology_warnings", [])],
-            skills_evolved=[],
-            next_steps=meta.get("next_steps", []),
+            skills_evolved=list(meta.get("skills_evolved", []) or []),
+            skills_promoted=list(meta.get("skills_promoted", []) or []),
+            next_steps=list(meta.get("next_steps", []) or []),
+            follow_up_runs=list(meta.get("follow_up_runs", []) or []),
         )
 
 
@@ -244,7 +275,7 @@ class RunConfig:
 class Run:
     """A managed implementation run with full lifecycle."""
     id: str = field(default_factory=lambda: f"run_{uuid.uuid4().hex[:8]}")
-    config: RunConfig = field(default_factory=RunConfig)
+    config: RunConfig = field(default_factory=lambda: RunConfig(goal=""))
     state: RunState = RunState.QUEUED
     proof: ProofBundle = field(default_factory=ProofBundle)
     retry_count: int = 0
