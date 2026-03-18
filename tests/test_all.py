@@ -1,6 +1,8 @@
+import json
+
 from agent_swarm import Run, RunConfig, Swarm
 from agent_swarm.core import TaskResult
-from agent_swarm.run_machine import ProofBundle
+from agent_swarm.run_machine import ProofBundle, RunMachine, RunState
 
 
 def test_public_api_imports_swarm():
@@ -79,3 +81,67 @@ def test_proof_bundle_from_result_captures_extended_metadata():
     assert proof.ontology_violations == ["warn: reviewer mismatch"]
     assert proof.tasks_completed[0]["output_preview"] == "Collect evidence"
     assert proof.tasks_failed[0]["error"] == "missing citation"
+
+
+def test_run_machine_persistence_round_trips_config_and_proof(tmp_path):
+    machine = RunMachine(persist_dir=str(tmp_path))
+    config = RunConfig(
+        goal="Review launch checklist",
+        trigger="github",
+        trigger_ref="issue#42",
+        playbook="code_review",
+        context="release blockers",
+        requires_approval=True,
+        max_retries=5,
+        priority=2,
+        workspace_id="ws_123",
+        metadata={"team": "ops"},
+    )
+    run_id = machine.submit(config)
+    run = machine.get(run_id)
+
+    run.proof.tests_run = 4
+    run.proof.tests_passed = 3
+    run.proof.tests_failed = 1
+    run.proof.approval_status = "pending"
+    run.proof.files_changed = ["checklist.md"]
+    run.proof.follow_up_runs = ["run_followup"]
+    machine._transition(run, RunState.PLANNING, "loaded plan")
+
+    raw = json.loads((tmp_path / f"{run_id}.json").read_text())
+    assert raw["config"]["workspace_id"] == "ws_123"
+    assert raw["proof"]["tests"]["run"] == 4
+
+    reloaded = RunMachine(persist_dir=str(tmp_path))
+    restored = reloaded.get(run_id)
+
+    assert restored is not None
+    assert restored.config.playbook == "code_review"
+    assert restored.config.context == "release blockers"
+    assert restored.config.requires_approval is True
+    assert restored.config.max_retries == 5
+    assert restored.config.priority == 2
+    assert restored.config.workspace_id == "ws_123"
+    assert restored.config.metadata == {"team": "ops"}
+    assert restored.proof.tests_run == 4
+    assert restored.proof.tests_passed == 3
+    assert restored.proof.tests_failed == 1
+    assert restored.proof.approval_status == "pending"
+    assert restored.proof.files_changed == ["checklist.md"]
+    assert restored.proof.follow_up_runs == ["run_followup"]
+    assert restored.proof.state_history[0].to_state == "planning"
+
+
+def test_run_machine_requeues_retrying_runs_after_reload(tmp_path):
+    machine = RunMachine(persist_dir=str(tmp_path))
+    run_id = machine.submit(RunConfig(goal="Retry review", priority=1))
+    run = machine.get(run_id)
+
+    machine._transition(run, RunState.PLANNING, "start")
+    machine._transition(run, RunState.FAILED, "failed once")
+    machine._transition(run, RunState.RETRYING, "retry scheduled")
+
+    reloaded = RunMachine(persist_dir=str(tmp_path))
+
+    assert reloaded.queue_size() == 1
+    assert reloaded.list_runs(RunState.RETRYING)[0]["id"] == run_id
