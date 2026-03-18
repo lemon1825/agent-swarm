@@ -1,0 +1,54 @@
+mutation:
+  allowed_failure_classes:
+    - validation_failure
+    - repeated_retry
+    - ontology_mismatch
+    - task_class_weakness
+  bypass_validation: false
+
+crossover:
+  require_same_task_class: false
+  require_domain_compatibility: true
+  minimum_distance: 0.3
+  guard: reject_similar_parents
+
+fitness:
+  weights:
+    success_rate: 0.30
+    retry_reduction: 0.15
+    latency_bonus: 0.10
+    validation_pass_rate: 0.15
+    task_class_fit: 0.15
+    adversarial_robustness: 0.15
+  inspectable: true
+
+promotion:
+  gates:
+    - minimum_hits
+    - usefulness_threshold
+    - global_baseline
+    - class_baseline
+    - run_effectiveness
+    - replay_delta
+  require_replay_pass: true
+  minimum_fitness_delta: 0.05
+
+adversarial:
+  scenarios_per_skill: 5
+  coverage_threshold: 0.20
+  budget_aware: true
+  llm_cost: zero
+
+tournament:
+  bottom_percentile: 25
+  demotion_target: inactive
+
+rollback:
+  enabled: true
+  trigger: quality_degradation
+
+lineage:
+  track_parents: true
+  track_generation: true
+  track_fitness_history: true
+  track_cause_of_death: true

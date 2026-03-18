@@ -1,0 +1,49 @@
+timeout:
+  default_per_task_s: 30
+  plan_level_override: true
+  role_level_override: false
+
+retry:
+  max_attempts: 3
+  backoff: exponential_with_jitter
+  error_classes:
+    rate_limit:
+      retry: true
+      max_backoff_s: 60
+    token_exceeded:
+      retry: false
+    auth_error:
+      retry: false
+    network:
+      retry: true
+      max_backoff_s: 30
+    server_error:
+      retry: true
+      max_backoff_s: 30
+    llm_exception:
+      retry: true
+      max_backoff_s: 10
+
+checkpoint:
+  phases:
+    - plan_validated
+    - wave_started
+    - task_completed
+    - approval_resolved
+    - wave_completed
+    - genetics_evolved
+    - run_completed
+  resume_from_last: true
+
+approval:
+  rejected_work_continues: false
+  audit_trail: required
+
+budget:
+  tracking: enabled
+  block_on_exceed: true
+  visibility: required
+
+handoff:
+  payload_validation: required
+  invalid_behavior: fail_clearly

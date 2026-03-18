@@ -1,0 +1,76 @@
+{
+  "name": "research-pack",
+  "version": "1.0.0",
+  "description": "Deep research workflows: source gathering, verification, synthesis, and reporting.",
+  "author": "Agent Swarm",
+  "category": "research",
+  "tags": ["research", "analysis", "sources", "synthesis", "report"],
+  "skills": [
+    {
+      "name": "SourceVerification",
+      "principle": "Cross-reference claims against 3+ independent sources. Flag single-source claims.",
+      "when_to_apply": "research, verification, fact-check, source validation",
+      "category": "research",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/WebSearch"],
+        "task_types": ["sw:TaskType/Research"],
+        "domain": "research"
+      }
+    },
+    {
+      "name": "QuantitativeExtraction",
+      "principle": "Extract numerical data, dates, percentages, and metrics. Present with source attribution.",
+      "when_to_apply": "data extraction, numbers, metrics, statistics, quantitative",
+      "category": "research",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/DataAnalysis"],
+        "task_types": ["sw:TaskType/Research", "sw:TaskType/Analysis"],
+        "domain": "research"
+      }
+    },
+    {
+      "name": "CompetitiveLandscape",
+      "principle": "Map competitors by market position, pricing, features, and differentiation. Use SWOT framework.",
+      "when_to_apply": "competitor, market analysis, landscape, positioning, SWOT",
+      "category": "research",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/WebSearch", "sw:SkillCap/DataAnalysis"],
+        "task_types": ["sw:TaskType/Research", "sw:TaskType/Analysis"],
+        "domain": "research"
+      }
+    },
+    {
+      "name": "SynthesisReport",
+      "principle": "Combine multiple research outputs into a coherent narrative with executive summary, key findings, and recommendations.",
+      "when_to_apply": "synthesis, report, summary, combine findings, executive summary",
+      "category": "research",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/TextGeneration"],
+        "task_types": ["sw:TaskType/Writing"],
+        "domain": "research"
+      }
+    }
+  ],
+  "ontology_terms": [
+    {"id": "sw:TaskType/SourceVerification", "label": "Source Verification", "kind": "Concept",
+     "definition": "Cross-reference and validate information sources", "parents": ["sw:TaskType/Research"]},
+    {"id": "sw:TaskType/DataExtraction", "label": "Data Extraction", "kind": "Concept",
+     "definition": "Extract structured data from unstructured sources", "parents": ["sw:TaskType/Research"]},
+    {"id": "sw:TaskType/Synthesis", "label": "Synthesis", "kind": "Concept",
+     "definition": "Combine multiple inputs into coherent output", "parents": ["sw:TaskType/Writing"]},
+    {"id": "sw:ArtifactType/ResearchBrief", "label": "Research Brief", "kind": "Concept",
+     "definition": "Concise research summary with key findings"}
+  ],
+  "ontology_relations": [
+    {"predicate": "sw:requires", "subject": "sw:TaskType/SourceVerification", "object": "sw:SkillCap/WebSearch"},
+    {"predicate": "sw:requires", "subject": "sw:TaskType/DataExtraction", "object": "sw:SkillCap/DataAnalysis"},
+    {"predicate": "sw:produces", "subject": "sw:TaskType/Synthesis", "object": "sw:ArtifactType/ResearchBrief"},
+    {"predicate": "sw:next_task", "subject": "sw:TaskType/SourceVerification", "object": "sw:TaskType/DataExtraction"},
+    {"predicate": "sw:next_task", "subject": "sw:TaskType/DataExtraction", "object": "sw:TaskType/Synthesis"}
+  ],
+  "competency_questions": [
+    "What sources does this research require verification for?",
+    "What quantitative data can be extracted from these sources?",
+    "How should multiple research findings be synthesized?"
+  ]
+}

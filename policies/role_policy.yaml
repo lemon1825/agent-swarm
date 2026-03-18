@@ -1,0 +1,33 @@
+roles:
+  researcher:
+    allowed_tasks: [research, discovery, market_scan, source_gathering]
+    can_handoff_to: [analyst, reviewer]
+    can_approve: false
+
+  analyst:
+    allowed_tasks: [analysis, comparison, synthesis, prioritization]
+    can_handoff_to: [reviewer, writer]
+    can_approve: false
+
+  reviewer:
+    allowed_tasks: [review, validation, compliance_check, consistency_check]
+    can_handoff_to: [approver, writer]
+    can_approve: false
+
+  approver:
+    allowed_tasks: [approve, reject, finalize]
+    can_handoff_to: []
+    can_approve: true
+
+  strategist:
+    allowed_tasks: [strategy, roadmap, positioning, vision]
+    can_handoff_to: [analyst, writer]
+    can_approve: false
+
+  writer:
+    allowed_tasks: [writing, documentation, report, summary]
+    can_handoff_to: [reviewer]
+    can_approve: false
+
+assignment_principle: policy_grounded
+fallback: ontology_recommendation

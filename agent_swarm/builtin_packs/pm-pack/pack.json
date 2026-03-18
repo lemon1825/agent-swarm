@@ -1,0 +1,98 @@
+{
+  "name": "pm-pack",
+  "version": "1.0.0",
+  "description": "Product management workflows: discovery, strategy, PRD writing, launch planning, north star definition.",
+  "author": "Agent Swarm",
+  "category": "pm",
+  "tags": ["pm", "product", "strategy", "PRD", "launch", "discovery", "roadmap"],
+  "skills": [
+    {
+      "name": "MarketDiscovery",
+      "principle": "Identify unmet needs, market gaps, and emerging trends. Use Jobs-to-be-Done framework.",
+      "when_to_apply": "discovery, market, opportunity, unmet need, JTBD, emerging",
+      "category": "pm",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/WebSearch", "sw:SkillCap/DataAnalysis"],
+        "task_types": ["sw:TaskType/Research", "sw:TaskType/Strategy"],
+        "domain": "pm"
+      }
+    },
+    {
+      "name": "PositioningStrategy",
+      "principle": "Define target audience, value proposition, and competitive positioning. Use positioning canvas.",
+      "when_to_apply": "positioning, strategy, value proposition, target audience, differentiation",
+      "category": "pm",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/DataAnalysis", "sw:SkillCap/TextGeneration"],
+        "task_types": ["sw:TaskType/Strategy"],
+        "domain": "pm"
+      }
+    },
+    {
+      "name": "PRDWriter",
+      "principle": "Write structured PRD with problem statement, goals, non-goals, requirements, success metrics, and timeline.",
+      "when_to_apply": "PRD, requirements, specification, product document, feature spec",
+      "category": "pm",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/TextGeneration"],
+        "task_types": ["sw:TaskType/Writing"],
+        "artifact_types": ["sw:ArtifactType/PRD"],
+        "domain": "pm"
+      }
+    },
+    {
+      "name": "LaunchPlanner",
+      "principle": "Create launch plan with timeline, channels, messaging, success criteria, and risk mitigation.",
+      "when_to_apply": "launch, go-to-market, GTM, release, announcement, rollout",
+      "category": "pm",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/TextGeneration", "sw:SkillCap/DataAnalysis"],
+        "task_types": ["sw:TaskType/Strategy", "sw:TaskType/Writing"],
+        "domain": "pm"
+      }
+    },
+    {
+      "name": "NorthStarDefiner",
+      "principle": "Define north star metric, input metrics, and measurement framework. Align team around single outcome.",
+      "when_to_apply": "north star, metric, KPI, OKR, measurement, outcome, alignment",
+      "category": "pm",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/DataAnalysis"],
+        "task_types": ["sw:TaskType/Strategy"],
+        "domain": "pm"
+      }
+    }
+  ],
+  "ontology_terms": [
+    {"id": "sw:TaskType/Discovery", "label": "Discovery", "kind": "Concept",
+     "definition": "Explore market opportunities and unmet needs", "parents": ["sw:TaskType/Research"]},
+    {"id": "sw:TaskType/Positioning", "label": "Positioning", "kind": "Concept",
+     "definition": "Define competitive positioning and value proposition", "parents": ["sw:TaskType/Strategy"]},
+    {"id": "sw:TaskType/PRDWriting", "label": "PRD Writing", "kind": "Concept",
+     "definition": "Write product requirements document", "parents": ["sw:TaskType/Writing"]},
+    {"id": "sw:TaskType/LaunchPlanning", "label": "Launch Planning", "kind": "Concept",
+     "definition": "Plan go-to-market strategy and execution", "parents": ["sw:TaskType/Strategy"]},
+    {"id": "sw:ArtifactType/DiscoveryBrief", "label": "Discovery Brief", "kind": "Concept",
+     "definition": "Market opportunity analysis and recommendation"},
+    {"id": "sw:ArtifactType/LaunchPlan", "label": "Launch Plan", "kind": "Concept",
+     "definition": "Go-to-market timeline, channels, and success criteria"}
+  ],
+  "ontology_relations": [
+    {"predicate": "sw:requires", "subject": "sw:TaskType/Discovery", "object": "sw:SkillCap/WebSearch"},
+    {"predicate": "sw:requires", "subject": "sw:TaskType/Positioning", "object": "sw:SkillCap/DataAnalysis"},
+    {"predicate": "sw:requires", "subject": "sw:TaskType/PRDWriting", "object": "sw:SkillCap/TextGeneration"},
+    {"predicate": "sw:produces", "subject": "sw:TaskType/Discovery", "object": "sw:ArtifactType/DiscoveryBrief"},
+    {"predicate": "sw:produces", "subject": "sw:TaskType/PRDWriting", "object": "sw:ArtifactType/PRD"},
+    {"predicate": "sw:produces", "subject": "sw:TaskType/LaunchPlanning", "object": "sw:ArtifactType/LaunchPlan"},
+    {"predicate": "sw:next_task", "subject": "sw:TaskType/Discovery", "object": "sw:TaskType/Positioning"},
+    {"predicate": "sw:next_task", "subject": "sw:TaskType/Positioning", "object": "sw:TaskType/PRDWriting"},
+    {"predicate": "sw:next_task", "subject": "sw:TaskType/PRDWriting", "object": "sw:TaskType/LaunchPlanning"},
+    {"predicate": "sw:approval_required", "subject": "sw:TaskType/LaunchPlanning", "object": "sw:Policy/ManagerApproval"}
+  ],
+  "competency_questions": [
+    "What market opportunities exist for this product?",
+    "How should we position against competitors?",
+    "What requirements belong in the PRD?",
+    "Is approval required before launch?"
+  ]
+}

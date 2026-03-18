@@ -1,0 +1,34 @@
+selection:
+  criteria:
+    - goal_type
+    - task_type
+    - ontology_alignment
+    - role_compatibility
+    - expected_outputs
+  deterministic: true
+  explainable: true
+
+builtin_playbooks:
+  - research
+  - code_review
+  - discover
+  - strategy
+  - write_prd
+  - plan_launch
+  - north_star
+
+next_step_guidance:
+  grounded_in:
+    - workflow_sequence
+    - ontology_alignment
+    - goal_ancestry
+
+boundaries:
+  scripting_layer: false
+  inspectable: true
+  bounded: true
+
+types:
+  workflow_playbook: multi_step_execution
+  reference_asset: supporting_knowledge
+  conflation: disallowed

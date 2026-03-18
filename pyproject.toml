@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-swarm-core"
+version = "1.0.0"
+description = "A lightweight, test-first agent workflow engine with skill genetics, ontology routing, and proof bundles. Zero dependencies."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+keywords = ["agent", "swarm", "orchestrator", "multi-agent", "llm", "async", "dag", "ontology", "skill-genetics", "proof-bundle"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+]
+
+[project.scripts]
+agent-swarm = "agent_swarm.__main__:main"
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.20"]
+all = ["openai>=1.0", "anthropic>=0.20"]
+
+[project.urls]
+Homepage = "https://github.com/doeun/agent-swarm"
+Documentation = "https://github.com/doeun/agent-swarm#readme"
+Issues = "https://github.com/doeun/agent-swarm/issues"
+
+[tool.setuptools.packages.find]
+include = ["agent_swarm*"]

@@ -1,0 +1,35 @@
+gate_mode: soft
+
+rule_classes:
+  unknown_term:
+    severity: warn
+  missing_required_capability:
+    severity: warn
+  invalid_task_role_pair:
+    severity: error
+  invalid_task_playbook_pair:
+    severity: warn
+  invalid_handoff:
+    severity: error
+  missing_approval_semantics:
+    severity: warn
+
+strict_blocks:
+  - plan_validation
+  - task_execution
+  - handoff
+
+design_boundary:
+  allowed_in_core:
+    - term_resolution
+    - alias_resolution
+    - ancestor_closure
+    - capability_inheritance
+    - approval_semantics
+    - routing_recommendations
+  product_layer_only:
+    - rdf_store
+    - owl_reasoning
+    - shacl_validation
+    - sparql_queries
+    - graph_visualization

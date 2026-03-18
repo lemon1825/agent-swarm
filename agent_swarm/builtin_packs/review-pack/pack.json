@@ -1,0 +1,80 @@
+{
+  "name": "review-pack",
+  "version": "1.0.0",
+  "description": "Review and compliance workflows: code review, security scan, quality gates, approval chains.",
+  "author": "Agent Swarm",
+  "category": "review",
+  "tags": ["review", "code-review", "security", "compliance", "quality", "approval"],
+  "skills": [
+    {
+      "name": "SecurityScan",
+      "principle": "Check for OWASP Top 10 vulnerabilities. Report severity (HIGH/MEDIUM/LOW) with file:line references.",
+      "when_to_apply": "security, vulnerability, injection, auth, OWASP, scan",
+      "category": "review",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/CodeAnalysis"],
+        "task_types": ["sw:TaskType/Review"],
+        "domain": "review"
+      }
+    },
+    {
+      "name": "CodeQualityCheck",
+      "principle": "Identify code smells, duplicated logic, missing error handling, and test coverage gaps.",
+      "when_to_apply": "code quality, smell, duplicate, error handling, coverage",
+      "category": "review",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/CodeAnalysis"],
+        "task_types": ["sw:TaskType/Review"],
+        "domain": "review"
+      }
+    },
+    {
+      "name": "ComplianceCheck",
+      "principle": "Verify adherence to coding standards, naming conventions, and documentation requirements.",
+      "when_to_apply": "compliance, standards, convention, documentation, policy",
+      "category": "review",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/CodeAnalysis"],
+        "task_types": ["sw:TaskType/Review"],
+        "domain": "review"
+      }
+    },
+    {
+      "name": "FixSuggestion",
+      "principle": "Provide minimal, targeted fixes with before/after code. Explain why the fix is needed.",
+      "when_to_apply": "fix, patch, suggestion, refactor, correction",
+      "category": "review",
+      "manifest": {
+        "capabilities": ["sw:SkillCap/TextGeneration", "sw:SkillCap/CodeAnalysis"],
+        "task_types": ["sw:TaskType/Writing"],
+        "domain": "review"
+      }
+    }
+  ],
+  "ontology_terms": [
+    {"id": "sw:TaskType/SecurityScan", "label": "Security Scan", "kind": "Concept",
+     "definition": "Scan for security vulnerabilities and misconfigurations", "parents": ["sw:TaskType/Review"]},
+    {"id": "sw:TaskType/QualityCheck", "label": "Quality Check", "kind": "Concept",
+     "definition": "Check code quality, patterns, and best practices", "parents": ["sw:TaskType/Review"]},
+    {"id": "sw:TaskType/ComplianceCheck", "label": "Compliance Check", "kind": "Concept",
+     "definition": "Verify adherence to standards and policies", "parents": ["sw:TaskType/Review"]},
+    {"id": "sw:ArtifactType/ReviewReport", "label": "Review Report", "kind": "Concept",
+     "definition": "Structured review findings with severity and recommendations"},
+    {"id": "sw:ArtifactType/FixPlan", "label": "Fix Plan", "kind": "Concept",
+     "definition": "Prioritized list of fixes with before/after code"}
+  ],
+  "ontology_relations": [
+    {"predicate": "sw:requires", "subject": "sw:TaskType/SecurityScan", "object": "sw:SkillCap/CodeAnalysis"},
+    {"predicate": "sw:requires", "subject": "sw:TaskType/QualityCheck", "object": "sw:SkillCap/CodeAnalysis"},
+    {"predicate": "sw:produces", "subject": "sw:TaskType/SecurityScan", "object": "sw:ArtifactType/ReviewReport"},
+    {"predicate": "sw:produces", "subject": "sw:TaskType/QualityCheck", "object": "sw:ArtifactType/FixPlan"},
+    {"predicate": "sw:next_task", "subject": "sw:TaskType/SecurityScan", "object": "sw:TaskType/QualityCheck"},
+    {"predicate": "sw:next_task", "subject": "sw:TaskType/QualityCheck", "object": "sw:TaskType/ComplianceCheck"},
+    {"predicate": "sw:approval_required", "subject": "sw:TaskType/ComplianceCheck", "object": "sw:Policy/LeadApproval"}
+  ],
+  "competency_questions": [
+    "What security vulnerabilities exist in this code?",
+    "Does this code meet quality standards?",
+    "Is approval required before deployment?"
+  ]
+}
