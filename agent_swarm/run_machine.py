@@ -184,6 +184,7 @@ class ProofBundle:
                      "time_s": self.execution_time_s, "llm_calls": self.llm_calls},
             "skills": {"evolved": self.skills_evolved, "promoted": self.skills_promoted},
             "next_steps": self.next_steps,
+            "follow_up_runs": self.follow_up_runs,
             "created_at": self.created_at, "completed_at": self.completed_at,
         }
         return d
@@ -192,10 +193,58 @@ class ProofBundle:
         return json.dumps(self.to_dict(), indent=2, ensure_ascii=False, default=str)
 
     @classmethod
+    def from_dict(cls, data: Dict) -> 'ProofBundle':
+        payload = dict(data or {})
+        history = []
+        for item in payload.get("state_history", []) or []:
+            history.append(StateTransition(
+                from_state=item.get("from", item.get("from_state", "")),
+                to_state=item.get("to", item.get("to_state", "")),
+                timestamp=item.get("timestamp", time.time()),
+                reason=item.get("reason", ""),
+                actor=item.get("actor", ""),
+            ))
+        tests = payload.pop("tests", {}) or {}
+        approval = payload.pop("approval", {}) or {}
+        skills = payload.pop("skills", {}) or {}
+        payload["state_history"] = history
+        payload["tests_run"] = int(tests.get("run", payload.get("tests_run", 0)) or 0)
+        payload["tests_passed"] = int(tests.get("passed", payload.get("tests_passed", 0)) or 0)
+        payload["tests_failed"] = int(tests.get("failed", payload.get("tests_failed", 0)) or 0)
+        payload["approval_status"] = approval.get("status", payload.get("approval_status", "")) or ""
+        payload["approved_by"] = approval.get("by", payload.get("approved_by", "")) or ""
+        payload["approval_notes"] = approval.get("notes", payload.get("approval_notes", "")) or ""
+        payload["skills_evolved"] = list(skills.get("evolved", payload.get("skills_evolved", [])) or [])
+        payload["skills_promoted"] = list(skills.get("promoted", payload.get("skills_promoted", [])) or [])
+
+        allowed = cls.__dataclass_fields__.keys()
+        return cls(**{k: v for k, v in payload.items() if k in allowed})
+
+    @staticmethod
+    def _coerce_tests(meta: Dict) -> Dict[str, int]:
+        tests = meta.get("tests", {}) or {}
+        return {
+            "run": int(tests.get("run", meta.get("tests_run", 0)) or 0),
+            "passed": int(tests.get("passed", meta.get("tests_passed", 0)) or 0),
+            "failed": int(tests.get("failed", meta.get("tests_failed", 0)) or 0),
+        }
+
+    @staticmethod
+    def _coerce_approval(meta: Dict) -> Dict[str, str]:
+        approval = meta.get("approval", {}) or {}
+        return {
+            "status": str(approval.get("status", meta.get("approval_status", "")) or ""),
+            "by": str(approval.get("by", meta.get("approved_by", "")) or ""),
+            "notes": str(approval.get("notes", meta.get("approval_notes", "")) or ""),
+        }
+
+    @classmethod
     def from_result(cls, run_id: str, goal: str, result: Dict, trigger: str = "manual", trigger_ref: str = "") -> 'ProofBundle':
         """Create proof bundle from Swarm.run() result."""
         meta = result.get("metadata", {})
         results = result.get("results", {})
+        tests = cls._coerce_tests(meta)
+        approval = cls._coerce_approval(meta)
 
         completed = []
         failed = []
@@ -209,17 +258,28 @@ class ProofBundle:
                 entry["error"] = tr.error or "; ".join(tr.validation_failures)
                 failed.append(entry)
 
+        validation_summary = meta.get("validation_summary", "")
+        if not validation_summary and meta.get("errors"):
+            validation_summary = "; ".join(f"{k}: {v}" for k, v in meta["errors"].items())[:500]
+
         return cls(
             run_id=run_id, goal=goal,
             trigger=trigger, trigger_ref=trigger_ref,
             tasks_completed=completed, tasks_failed=failed,
+            files_changed=list(meta.get("files_changed", []) or []),
+            artifacts=list(meta.get("artifacts", []) or []),
+            tests_run=tests["run"], tests_passed=tests["passed"], tests_failed=tests["failed"],
+            validation_summary=validation_summary,
+            ontology_violations=[str(w) for w in meta.get("plan_quality", {}).get("ontology_warnings", [])],
+            approval_status=approval["status"], approved_by=approval["by"], approval_notes=approval["notes"],
             total_tokens=meta.get("total_tokens", 0),
             total_cost_usd=meta.get("budget_spent_usd", 0),
             execution_time_s=meta.get("execution_time_s", 0),
             llm_calls=meta.get("llm_calls_used", 0),
-            ontology_violations=[str(w) for w in meta.get("plan_quality", {}).get("ontology_warnings", [])],
-            skills_evolved=[],
-            next_steps=meta.get("next_steps", []),
+            skills_evolved=list(meta.get("skills_evolved", []) or []),
+            skills_promoted=list(meta.get("skills_promoted", []) or []),
+            next_steps=list(meta.get("next_steps", []) or []),
+            follow_up_runs=list(meta.get("follow_up_runs", []) or []),
         )
 
 
@@ -239,12 +299,37 @@ class RunConfig:
     workspace_id: str = ""          # For isolated workspace
     metadata: Dict = field(default_factory=dict)
 
+    def to_dict(self) -> Dict:
+        return {
+            "goal": self.goal,
+            "tasks": self.tasks,
+            "trigger": self.trigger,
+            "trigger_ref": self.trigger_ref,
+            "playbook": self.playbook,
+            "pack": self.pack,
+            "context": self.context,
+            "requires_approval": self.requires_approval,
+            "max_retries": self.max_retries,
+            "priority": self.priority,
+            "workspace_id": self.workspace_id,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'RunConfig':
+        payload = dict(data or {})
+        allowed = cls.__dataclass_fields__.keys()
+        payload.setdefault("goal", "")
+        payload.setdefault("tasks", [])
+        payload.setdefault("metadata", {})
+        return cls(**{k: payload[k] for k in allowed if k in payload})
+
 
 @dataclass
 class Run:
     """A managed implementation run with full lifecycle."""
     id: str = field(default_factory=lambda: f"run_{uuid.uuid4().hex[:8]}")
-    config: RunConfig = field(default_factory=RunConfig)
+    config: RunConfig = field(default_factory=lambda: RunConfig(goal=""))
     state: RunState = RunState.QUEUED
     proof: ProofBundle = field(default_factory=ProofBundle)
     retry_count: int = 0
@@ -313,7 +398,10 @@ class RunMachine:
                  "created": r.created_at} for r in sorted(runs, key=lambda r: r.created_at, reverse=True)]
 
     def queue_size(self) -> int:
-        return len([r for r in self._queue if self._runs[r].state == RunState.QUEUED])
+        return len([
+            r for r in self._queue
+            if self._runs[r].state in (RunState.QUEUED, RunState.RETRYING)
+        ])
 
     async def execute(self, run_id: str, swarm, approval_callback: Callable = None):
         """Execute a run through the full state machine."""
@@ -416,6 +504,7 @@ class RunMachine:
     def _transition(self, run: Run, new_state: RunState, reason: str, actor: str = "system"):
         old = run.state
         if run.transition(new_state, reason, actor):
+            self._persist_run(run)
             for cb in self._on_state_change:
                 try:
                     cb(run.id, old.value, new_state.value, reason)
@@ -428,12 +517,13 @@ class RunMachine:
         path = os.path.join(self._persist_dir, f"{run.id}.json")
         with open(path, "w") as f:
             json.dump({
-                "id": run.id, "state": run.state.value,
-                "config": {"goal": run.config.goal, "trigger": run.config.trigger,
-                           "trigger_ref": run.config.trigger_ref, "priority": run.config.priority},
+                "id": run.id,
+                "state": run.state.value,
+                "config": run.config.to_dict(),
                 "proof": run.proof.to_dict(),
                 "retry_count": run.retry_count,
                 "created_at": run.created_at,
+                "updated_at": run.updated_at,
             }, f, indent=2, default=str)
 
     def _load(self):
@@ -445,12 +535,27 @@ class RunMachine:
             try:
                 with open(os.path.join(self._persist_dir, fname)) as f:
                     data = json.load(f)
-                config = RunConfig(goal=data["config"]["goal"],
-                                   trigger=data["config"].get("trigger", "manual"),
-                                   trigger_ref=data["config"].get("trigger_ref", ""))
-                run = Run(id=data["id"], config=config,
-                          state=RunState(data["state"]),
-                          created_at=data.get("created_at", 0))
+                config = RunConfig.from_dict(data.get("config", {}))
+                run = Run(
+                    id=data["id"],
+                    config=config,
+                    state=RunState(data["state"]),
+                    proof=ProofBundle.from_dict(data.get("proof", {})),
+                    retry_count=data.get("retry_count", 0),
+                    created_at=data.get("created_at", 0),
+                    updated_at=data.get("updated_at", data.get("created_at", 0)),
+                )
+                if not run.proof.run_id:
+                    run.proof.run_id = run.id
+                if not run.proof.goal:
+                    run.proof.goal = run.config.goal
+                if not run.proof.trigger:
+                    run.proof.trigger = run.config.trigger
+                if not run.proof.trigger_ref:
+                    run.proof.trigger_ref = run.config.trigger_ref
                 self._runs[run.id] = run
+                if run.state in (RunState.QUEUED, RunState.RETRYING):
+                    self._queue.append(run.id)
             except Exception:
                 pass
+        self._queue.sort(key=lambda rid: self._runs[rid].config.priority)
