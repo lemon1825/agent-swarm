@@ -35,12 +35,15 @@ Usage:
 __all__ = ['RunState', 'TRANSITIONS', 'StateTransition', 'ProofBundle', 'RunConfig', 'Run', 'RunMachine', 'ReviewGate', 'ReviewResult']
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+logger = logging.getLogger("agent_swarm")
 
 
 class RunState(str, Enum):
@@ -606,5 +609,5 @@ class RunMachine:
                 self._runs[run.id] = run
                 if run.state == RunState.RETRYING:
                     self._queue.append(run.id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load run from %s: %s", fname, exc)

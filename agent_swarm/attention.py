@@ -241,17 +241,41 @@ def adaptive_budget(
 #  Feature 4: AttentionMap — metrics and visualization
 # ================================================================
 
+class AttentionMapBuilder:
+    """Mutable builder for collecting attention entries during execution.
+
+    Use this during DAG execution to avoid O(n^2) tuple concatenation,
+    then call freeze() to produce an immutable AttentionMap.
+    """
+    def __init__(self):
+        self._entries: List[Tuple[str, str, float, int]] = []
+
+    def record(self, source: str, target: str, weight: float, wave: int) -> None:
+        """Append an attention weight entry. Mutates in place (O(1) amortized)."""
+        self._entries.append((source, target, weight, wave))
+
+    def freeze(self) -> "AttentionMap":
+        """Produce an immutable AttentionMap from collected entries."""
+        return AttentionMap(entries=tuple(self._entries))
+
+
 @dataclass(frozen=True)
 class AttentionMap:
     """Immutable attention weight tracker for DAG execution.
 
     Each record() returns a new AttentionMap with the additional entry.
     Provides locality scoring, skip connection detection, and ASCII heatmap.
+
+    For bulk collection during execution, prefer AttentionMapBuilder
+    which avoids O(n^2) tuple concatenation.
     """
     entries: Tuple[Tuple[str, str, float, int], ...] = ()
 
     def record(self, source: str, target: str, weight: float, wave: int) -> "AttentionMap":
-        """Record an attention weight. Returns new AttentionMap (immutable)."""
+        """Record an attention weight. Returns new AttentionMap (immutable).
+
+        Note: For hot loops, prefer AttentionMapBuilder to avoid O(n^2) copying.
+        """
         return AttentionMap(
             entries=self.entries + ((source, target, weight, wave),)
         )

@@ -5,7 +5,7 @@ from agent_swarm.attention import (
     softmax, rmsnorm_score,
     softmax_weight_context, select_relevant_context_enhanced,
     compress_block, build_wave_context,
-    adaptive_budget, AttentionMap,
+    adaptive_budget, AttentionMap, AttentionMapBuilder,
 )
 
 
@@ -292,3 +292,118 @@ def test_heatmap_empty():
 
 def test_locality_empty():
     assert AttentionMap().locality_score() == 0.0
+
+
+# ================================================================
+#  AttentionMapBuilder
+# ================================================================
+
+def test_builder_freeze():
+    b = AttentionMapBuilder()
+    b.record("t0", "t1", 0.8, 0)
+    b.record("t1", "t2", 0.5, 1)
+    m = b.freeze()
+    assert isinstance(m, AttentionMap)
+    assert len(m.entries) == 2
+    assert m.entries[0] == ("t0", "t1", 0.8, 0)
+
+
+def test_builder_freeze_empty():
+    m = AttentionMapBuilder().freeze()
+    assert m.entries == ()
+    assert m.locality_score() == 0.0
+
+
+def test_builder_freeze_immutable():
+    b = AttentionMapBuilder()
+    b.record("a", "b", 0.5, 0)
+    m1 = b.freeze()
+    b.record("c", "d", 0.3, 1)
+    m2 = b.freeze()
+    assert len(m1.entries) == 1  # m1 unchanged
+    assert len(m2.entries) == 2
+
+
+# ================================================================
+#  Edge Cases: Softmax
+# ================================================================
+
+def test_softmax_weight_all_zero_scores():
+    tfidf = _StubTfIdf()
+    dep_ctx = {
+        "t1": "completely unrelated xyz",
+        "t2": "also unrelated abc",
+    }
+    result, weights = softmax_weight_context("quantum physics", dep_ctx, tfidf)
+    assert len(result) == 2
+    assert isinstance(weights, dict)
+
+
+def test_softmax_weight_no_rmsnorm():
+    tfidf = _StubTfIdf()
+    dep_ctx = {
+        "t1": "data science machine learning",
+        "t2": "cooking recipe kitchen",
+    }
+    result, weights = softmax_weight_context(
+        "data science", dep_ctx, tfidf, use_rmsnorm=False
+    )
+    assert weights["t1"] > weights["t2"]
+
+
+# ================================================================
+#  Edge Cases: Cross-Wave
+# ================================================================
+
+def test_cross_wave_all_failed():
+    tfidf = _StubTfIdf()
+    results = {
+        "t0": _StubResult("data analysis", success=False),
+        "t1": _StubResult("more data", success=False),
+    }
+    ctx, weights = select_relevant_context_enhanced(
+        "data", set(), results, tfidf
+    )
+    assert ctx == ""
+    assert weights == {}
+
+
+def test_cross_wave_excludes_deps():
+    tfidf = _StubTfIdf()
+    results = {
+        "t0": _StubResult("data science analysis results", wave=0),
+    }
+    ctx, weights = select_relevant_context_enhanced(
+        "data science", {"t0"}, results, tfidf
+    )
+    assert ctx == ""
+    assert weights == {}
+
+
+# ================================================================
+#  Edge Cases: Block Compression
+# ================================================================
+
+def test_compress_block_end_before_start():
+    assert compress_block(["wave 0"], 5, 2) == ""
+
+
+def test_build_context_block_size_zero():
+    summaries = ["Wave 0: ok", "Wave 1: ok"]
+    ctx = build_wave_context(summaries, [], block_size=0, current_wave=2)
+    assert "[Previous Waves]" in ctx
+
+
+# ================================================================
+#  Edge Cases: Adaptive Budget
+# ================================================================
+
+def test_adaptive_negative_factor_clamped():
+    budget = adaptive_budget(1000, 5, 10, depth_factor=-0.5)
+    assert budget == 1000  # Clamped to 0.0 → flat
+
+
+def test_adaptive_factor_above_one_clamped():
+    budget = adaptive_budget(1000, 9, 10, depth_factor=2.0)
+    # Clamped to 1.0 → scale = 1 - 1.0 * 1.0 = 0 → min 50
+    assert budget == 50

@@ -15,7 +15,8 @@ from .skills import Skill, SkillBank, SkillState, SkillManifest
 from .ontology import OntologyRegistry, OntologyGateMode
 from .playbooks import BUILTIN_PLAYBOOKS, SOPStep
 from .attention import (
-    AttentionMap, softmax_weight_context, select_relevant_context_enhanced,
+    AttentionMap, AttentionMapBuilder, softmax_weight_context,
+    select_relevant_context_enhanced,
     compress_block, build_wave_context, adaptive_budget,
 )
 
@@ -96,7 +97,7 @@ class RunContext:
     checkpoint: Optional[Dict] = None
     wave_summaries: List[str] = field(default_factory=list)  # per-wave summaries (Attention Residuals)
     block_summaries: List[str] = field(default_factory=list)
-    attention_map: Optional[AttentionMap] = None
+    attention_builder: Optional[AttentionMapBuilder] = None
     total_waves: int = 0
 
     def use_llm(self) -> bool:
@@ -490,7 +491,8 @@ class Swarm:
         # Attention Residuals: weight dependency context by relevance
         dep_weights = {}
         if dep_ctx and len(dep_ctx) > 1:
-            dep_ctx, dep_weights = self._weight_dep_context(task, dep_ctx)
+            dep_ctx, dep_weights = self._weight_dep_context(
+                task, dep_ctx, wave=wave, total_waves=ctx.total_waves)
 
         # Attention Residuals: build enriched run context with wave summaries + selective context
         enriched_run_ctx = ctx.context
@@ -505,9 +507,9 @@ class Swarm:
             enriched_run_ctx = f"{selective_ctx}\n{enriched_run_ctx}" if enriched_run_ctx else selective_ctx
 
         # Record attention weights
-        if ctx.attention_map is not None:
+        if ctx.attention_builder is not None:
             for src, w in {**dep_weights, **sel_weights}.items():
-                ctx.attention_map = ctx.attention_map.record(src, task.id, w, wave)
+                ctx.attention_builder.record(src, task.id, w, wave)
 
         truncate_level = 0  # 0=full, 1=moderate, 2=minimal
         retry_hint = ""     # Error context for self-correction
@@ -803,13 +805,14 @@ class Swarm:
             parts.append(f"  [{r.role}] {(r.output or '')[:80]}")
         return "\n".join(parts)
 
-    def _weight_dep_context(self, task: SubTask, dep_ctx: Dict[str, str]) -> Tuple[Dict[str, str], Dict[str, float]]:
+    def _weight_dep_context(self, task: SubTask, dep_ctx: Dict[str, str],
+                            wave: int = 0, total_waves: int = 0) -> Tuple[Dict[str, str], Dict[str, float]]:
         """Attention Residuals: weight dependencies by softmax + RMSNorm.
         Uses adaptive budget if configured."""
         budget = adaptive_budget(
             self.attention_total_budget,
-            getattr(task, '_wave', 0),
-            0,
+            wave,
+            total_waves,
             self.attention_depth_factor,
         ) if self.attention_total_budget > 0 else 0
         return softmax_weight_context(
@@ -899,7 +902,7 @@ class Swarm:
             ])
 
         waves = _topological_waves(tm); all_r = []; gi = 0; t0 = time.monotonic()
-        ctx.attention_map = AttentionMap()
+        ctx.attention_builder = AttentionMapBuilder()
         ctx.total_waves = len(waves)
         for wn, wids in enumerate(waves):
             wr, gi = await self._exec_wave(ctx, wn, wids, tm, gi); all_r.extend(wr)
@@ -983,8 +986,8 @@ class Swarm:
             "global_metrics": self.metrics.to_dict(), "next_steps": next_steps,
             "budget_spent_usd": round(self._spent_usd, 4) if self.budget_policy else 0,
             "genetics": genetics_report,
-            "attention_map": ctx.attention_map,
-            "attention_heatmap": ctx.attention_map.ascii_heatmap() if ctx.attention_map and ctx.attention_map.entries else "",
+            "attention_map": ctx.attention_builder.freeze() if ctx.attention_builder else AttentionMap(),
+            "attention_heatmap": ctx.attention_builder.freeze().ascii_heatmap() if ctx.attention_builder and ctx.attention_builder._entries else "",
             "tickets": [Ticket(ticket_id=r.task_id, title=r.task_id, priority="high" if r.wave == 0 else "medium",
                                assignee=r.role, status="done" if r.success else "failed",
                                actual_cost=round(r.duration_ms * 0.00001, 4),
