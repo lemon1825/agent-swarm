@@ -197,6 +197,40 @@ class OntologyRegistry:
                 "task_types": len(self._requires), "approval_policies": len(self._approval)}
 
     # ================================================================
+    #  Semantic search over ontology terms
+    # ================================================================
+
+    def find_similar_terms(self, query: str, top_k: int = 5) -> List[OntologyTerm]:
+        """Find ontology terms semantically similar to *query*.
+
+        Uses embeddings when sentence-transformers is installed;
+        otherwise falls back to label/definition keyword overlap.
+        """
+        from .semantic_router import SemanticRouter
+        router = SemanticRouter()
+
+        if router.available():
+            # Build text representations for all terms
+            term_list = list(self._terms.values())
+            docs = [f"{t.label} {t.definition} {' '.join(t.aliases)}" for t in term_list]
+            scores = router.score(query, docs)
+            ranked = sorted(zip(scores, term_list), key=lambda x: -x[0])
+            return [t for s, t in ranked[:top_k] if s > 0.1]
+
+        # Fallback: keyword overlap scoring
+        query_lo = query.lower()
+        query_words = set(w for w in query_lo.split() if len(w) > 2)
+        scored: List[tuple] = []
+        for t in self._terms.values():
+            text = f"{t.label} {t.definition} {' '.join(t.aliases)}".lower()
+            text_words = set(w for w in text.split() if len(w) > 2)
+            overlap = len(query_words & text_words)
+            if overlap > 0:
+                scored.append((overlap, t))
+        scored.sort(key=lambda x: -x[0])
+        return [t for _, t in scored[:top_k]]
+
+    # ================================================================
     #  Ontology-driven Planner / Recommendation
     # ================================================================
 
