@@ -32,7 +32,7 @@ Usage:
     print(proof.summary())
 """
 
-__all__ = ['RunState', 'TRANSITIONS', 'StateTransition', 'ProofBundle', 'RunConfig', 'Run', 'RunMachine']
+__all__ = ['RunState', 'TRANSITIONS', 'StateTransition', 'ProofBundle', 'RunConfig', 'Run', 'RunMachine', 'ReviewGate', 'ReviewResult']
 import asyncio
 import json
 import os
@@ -50,6 +50,7 @@ class RunState(str, Enum):
     TESTING = "testing"
     AWAITING_APPROVAL = "awaiting_approval"
     RETRYING = "retrying"
+    REVIEWING = "reviewing"
     COMPLETED = "completed"
     FAILED = "failed"
     REJECTED = "rejected"
@@ -60,12 +61,34 @@ class RunState(str, Enum):
         return self in (RunState.COMPLETED, RunState.FAILED, RunState.REJECTED, RunState.CANCELLED)
 
 
+@dataclass
+class ReviewResult:
+    """Result from a review gate evaluation."""
+    passed: bool
+    issues: List[str] = field(default_factory=list)
+    severity: str = "info"  # "critical", "important", "minor", "info"
+
+
+@dataclass
+class ReviewGate:
+    """A review gate in the review pipeline.
+
+    After TESTING passes, each gate runs in order. Required gates that fail
+    block progression to COMPLETED.
+    """
+    name: str                          # "spec_compliance", "code_quality"
+    reviewer: Callable                 # async (run_id, proof) -> ReviewResult
+    required: bool = True              # must pass to proceed
+    order: int = 0                     # execution order
+
+
 # Valid state transitions
 TRANSITIONS = {
     RunState.QUEUED: [RunState.PLANNING, RunState.CANCELLED],
     RunState.PLANNING: [RunState.IMPLEMENTING, RunState.FAILED],
     RunState.IMPLEMENTING: [RunState.TESTING, RunState.FAILED],
-    RunState.TESTING: [RunState.AWAITING_APPROVAL, RunState.COMPLETED, RunState.FAILED],
+    RunState.TESTING: [RunState.REVIEWING, RunState.AWAITING_APPROVAL, RunState.COMPLETED, RunState.FAILED],
+    RunState.REVIEWING: [RunState.COMPLETED, RunState.AWAITING_APPROVAL, RunState.FAILED],
     RunState.AWAITING_APPROVAL: [RunState.COMPLETED, RunState.REJECTED, RunState.RETRYING],
     RunState.RETRYING: [RunState.IMPLEMENTING, RunState.FAILED],
     RunState.REJECTED: [RunState.RETRYING, RunState.CANCELLED],
@@ -123,6 +146,12 @@ class ProofBundle:
     total_cost_usd: float = 0
     execution_time_s: float = 0
     llm_calls: int = 0
+
+    # Reviews
+    review_results: List[Dict] = field(default_factory=list)  # [{gate, passed, issues, severity}]
+
+    # Evidence
+    evidence_log: List[Dict] = field(default_factory=list)  # [{task_id, evidence_type, content, timestamp}]
 
     # Skills
     skills_evolved: List[str] = field(default_factory=list)
@@ -271,11 +300,12 @@ class RunMachine:
     This is the core of the "operational job system" model.
     """
 
-    def __init__(self, persist_dir: str = None):
+    def __init__(self, persist_dir: str = None, review_gates: List[ReviewGate] = None):
         self._runs: Dict[str, Run] = {}
         self._queue: List[str] = []  # Run IDs in priority order
         self._persist_dir = persist_dir
         self._on_state_change: List[Callable] = []
+        self._review_gates = sorted(review_gates or [], key=lambda g: g.order)
         if persist_dir:
             os.makedirs(persist_dir, exist_ok=True)
             self._load()
@@ -346,6 +376,39 @@ class RunMachine:
 
             # TESTING
             self._transition(run, RunState.TESTING, f"{proof.tests_passed}/{proof.tests_run} tests")
+
+            # REVIEWING — run review gates if configured
+            if self._review_gates:
+                self._transition(run, RunState.REVIEWING, "entering review gates")
+                review_blocked = False
+                for gate in self._review_gates:
+                    try:
+                        result = await gate.reviewer(run.id, run.proof)
+                    except Exception as exc:
+                        result = ReviewResult(passed=False, issues=[f"Gate error: {exc}"], severity="critical")
+                    run.proof.review_results.append({
+                        "gate": gate.name, "passed": result.passed,
+                        "issues": result.issues, "severity": result.severity,
+                    })
+                    if gate.required and not result.passed:
+                        review_blocked = True
+                        break
+                if review_blocked:
+                    self._transition(run, RunState.AWAITING_APPROVAL,
+                                     f"Review gate '{gate.name}' failed, needs review")
+                    run.proof.approval_status = "pending"
+                    if approval_callback:
+                        approved = await approval_callback(run.id, run.proof.summary())
+                        if approved:
+                            run.proof.approval_status = "approved"
+                            run.proof.approved_by = "callback"
+                            self._transition(run, RunState.COMPLETED, "Approved after review failure")
+                        else:
+                            run.proof.approval_status = "rejected"
+                            self._transition(run, RunState.REJECTED, "Rejected after review failure")
+                    run.proof.completed_at = time.time()
+                    self._persist_run(run)
+                    return run.proof
 
             has_failures = len(proof.tasks_failed) > 0
 

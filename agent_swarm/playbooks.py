@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
+from typing import Any, Optional
+
 @dataclass
 class SOPStep:
     name: str; role: str; description: str; instructions: str = ""
     expected_output: str = ""; depends_on: List[str] = field(default_factory=list)
     output_must_contain: List[str] = field(default_factory=list)
     requires_approval: bool = False
+    gate: Optional[Dict[str, Any]] = None
+    # gate format: {"type": "approval|keyword|custom", "condition": "...", "block_message": "..."}
 
 @dataclass
 class SOPPlaybook:
@@ -19,10 +23,13 @@ class SOPPlaybook:
         tasks = []; step_map = {}
         for i, step in enumerate(self.steps):
             tid = f"sop_{i}_{step.name.lower().replace(' ', '_')}"
-            tasks.append(SubTask(id=tid, description=f"[SOP:{self.name}] {step.description}" + (f"\nGoal:{goal}" if goal else ""),
+            t = SubTask(id=tid, description=f"[SOP:{self.name}] {step.description}" + (f"\nGoal:{goal}" if goal else ""),
                 role=step.role, instructions=step.instructions, expected_output=step.expected_output,
                 dependencies=[f"sop_{j}_{self.steps[j].name.lower().replace(' ', '_')}" for j in range(len(self.steps)) if self.steps[j].name in step.depends_on],
-                requires_approval=step.requires_approval))
+                requires_approval=step.requires_approval)
+            if step.gate:
+                t.metadata = {"gate": step.gate}
+            tasks.append(t)
             step_map[tid] = step
         return tasks, step_map
 

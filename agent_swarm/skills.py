@@ -31,6 +31,9 @@ class SkillManifest:
     capabilities: List[str] = field(default_factory=list)  # ontology term IDs this skill provides
     task_types: List[str] = field(default_factory=list)     # ontology task types this skill is designed for
     artifact_types: List[str] = field(default_factory=list) # ontology artifact types this skill can produce
+    # Role-specific prompt templates
+    prompt_templates: Dict[str, str] = field(default_factory=dict)
+    # e.g. {"implementer": "You are implementing...", "reviewer": "You are reviewing..."}
 
     def matches_task(self, desc: str, role: str = "") -> bool:
         lo = desc.lower()
@@ -67,6 +70,16 @@ class Skill:
         h = self.class_helped.get(task_class, 0); f = self.class_failed.get(task_class, 0)
         if h + f == 0: return self.usefulness
         return h / max(h + f, 1)
+    def get_prompt_for_role(self, role: str, context: Dict[str, str] = None) -> str:
+        """Get role-specific prompt template with variable substitution."""
+        if not self.manifest or role not in self.manifest.prompt_templates:
+            return self.principle
+        template = self.manifest.prompt_templates[role]
+        if context:
+            for k, v in context.items():
+                template = template.replace(f"{{{k}}}", str(v))
+        return template
+
     def to_prompt_str(self): return f"[{self.name}] {self.principle} (when: {self.when_to_apply})"
     def to_dict(self):
         d = {k: getattr(self, k) for k in self.__dataclass_fields__ if k not in ("state", "class_helped", "class_failed")}
@@ -99,11 +112,38 @@ class _TFIDFIndex:
     def _tok(t): return [w.lower() for w in t.split() if len(w) > 2]
 
 class FailureCluster:
-    def __init__(self): self._p: Dict[str, List[Dict]] = defaultdict(list)
-    def add(self, err, task, role): self._p[self._norm(err)].append({"error": err, "task": task, "role": role})
+    def __init__(self):
+        self._p: Dict[str, List[Dict]] = defaultdict(list)
+        self._task_attempts: Dict[str, int] = defaultdict(int)
+        self._escalations: List[Dict] = []
+
+    def add(self, err, task, role):
+        pat = self._norm(err)
+        self._p[pat].append({"error": err, "task": task, "role": role})
+        self._task_attempts[pat] += 1
+        if self._task_attempts[pat] >= 3 and not self._already_escalated(pat):
+            self._escalations.append({
+                "task_pattern": pat,
+                "attempts": self._task_attempts[pat],
+                "timestamp": time.time(),
+                "phase": "architecture_review_needed",
+            })
+
+    def _already_escalated(self, pat: str) -> bool:
+        return any(e["task_pattern"] == pat for e in self._escalations)
+
+    def get_escalations(self) -> List[Dict]:
+        """Return tasks needing architecture review (3+ failed attempts)."""
+        return list(self._escalations)
+
+    def needs_escalation(self, err: str) -> bool:
+        """Check if this error pattern has hit the escalation threshold."""
+        return self._task_attempts[self._norm(err)] >= 3
+
     def get_clusters(self, n=2):
         return sorted([{"pattern": k, "count": len(v), "roles": list({e["role"] for e in v}), "sample": v[0]["error"]}
                         for k, v in self._p.items() if len(v) >= n], key=lambda c: -c["count"])
+
     @staticmethod
     def _norm(e): s = e.lower()[:80]; s = re.sub(r'\d+', 'N', s); s = re.sub(r'/[^\s]+', '/P', s); return re.sub(r'\s+', ' ', s).strip()
 
@@ -144,9 +184,13 @@ class SkillBank:
         for s in result: s.hit_count += 1
         return result
 
-    def format_for_prompt(self, skills):
+    def format_for_prompt(self, skills, role=""):
         if not skills: return ""
-        return "[Available Skills]\n" + "\n".join(f"  - {s.to_prompt_str()}" for s in skills)
+        lines = []
+        for s in skills:
+            prompt = s.get_prompt_for_role(role) if role else s.to_prompt_str()
+            lines.append(f"  - {prompt}")
+        return "[Available Skills]\n" + "\n".join(lines)
 
     def add(self, skill):
         existing = self._find_dup(skill)
@@ -168,11 +212,20 @@ class SkillBank:
     def _prune(self, sk):
         if sk: w = min(sk, key=lambda s: (s.usefulness, s.hit_count)); w.state = SkillState.ARCHIVED; sk.remove(w)
 
-    def record_active_outcome(self, skills, ok, rid, task_class=""):
+    def record_active_outcome(self, skills, ok, rid, task_class="", evidence=""):
+        """Record outcome with optional verification evidence.
+
+        Args:
+            evidence: Verification command output or summary (e.g. "12/12 tests passed").
+                      Empty string allowed for backward compatibility.
+        """
         for s in skills:
             s.last_used_run = rid
             if ok: s.helped_count += 1; (s.class_helped.__setitem__(task_class, s.class_helped.get(task_class, 0) + 1) if task_class else None)
             else: s.failed_after += 1; (s.class_failed.__setitem__(task_class, s.class_failed.get(task_class, 0) + 1) if task_class else None)
+        if evidence:
+            for s in skills:
+                s._last_evidence = evidence
     def record_shadow_outcome(self, shadows, ok, rid, retry_count=1, latency_ms=0.0):
         for s in shadows:
             s.shadow_hits += 1

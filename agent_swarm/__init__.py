@@ -52,7 +52,7 @@ from .memory import MemoryStore, Memory
 from .streaming import StreamingAdapter, StreamCollector, streaming_print
 from .durable import DurableCheckpoint
 from .tracing import DetailedTracer, Trace, TraceNode
-from .run_machine import RunMachine, RunState, Run, RunConfig, ProofBundle, StateTransition
+from .run_machine import RunMachine, RunState, Run, RunConfig, ProofBundle, StateTransition, ReviewGate, ReviewResult
 from .workspace import WorkspaceManager, Workspace
 from .tracker import TrackerAdapter, TriggerEvent, TriggerFilter, LabelFilter
 from .supervisor import Supervisor, SupervisorConfig

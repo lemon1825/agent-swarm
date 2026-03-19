@@ -129,6 +129,7 @@ class SubTask:
     dependencies: List[str] = field(default_factory=list); tools: List[str] = field(default_factory=list)
     config: Optional[AgentConfig] = None; status: TaskStatus = field(default=TaskStatus.PENDING, repr=False)
     requires_approval: bool = False; handoff_from: Optional[Handoff] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class TaskResult:
@@ -417,6 +418,17 @@ class Swarm:
                             task.status = TaskStatus.FAILED
                             return TaskResult(idx, task.id, agent.role, agent.name, error=msg, wave=wave)
 
+        # Gate check: block execution if gate condition not met
+        gate = task.metadata.get('gate') if task.metadata else None
+        if gate:
+            dep_text = ""
+            if dep_ctx:
+                dep_text = " ".join(str(v) for v in dep_ctx.values())
+            if not self._check_gate(gate, task, dep_text):
+                task.status = TaskStatus.FAILED
+                return TaskResult(idx, task.id, agent.role, agent.name,
+                                  error=gate.get("block_message", "Gate condition not met"), wave=wave)
+
         if task.requires_approval:
             task.status = TaskStatus.PENDING_APPROVAL
             ctx.save_phase(task.id, "pending_approval", {"role": agent.role})
@@ -567,7 +579,14 @@ class Swarm:
         if len(output) > 200: p.append("detailed")
         if dur < 1000: p.append("fast")
         self.skill_bank.add(Skill(name=f"S:{task.role}", principle=f"For '{task.description[:40]}': {', '.join(p) if p else 'ok'}", when_to_apply=task.description[:80], source="success", category=task_class or "general", run_id=ctx.run_id))
-        self.skill_bank.record_active_outcome(active, True, ctx.run_id, task_class)
+        evidence = ""
+        if output:
+            out = str(output)
+            for pattern in ["passed", "PASS", "tests pass", "0 failures"]:
+                if pattern in out:
+                    evidence = out[:200]
+                    break
+        self.skill_bank.record_active_outcome(active, True, ctx.run_id, task_class, evidence)
         self.skill_bank.record_shadow_outcome(shadow, True, ctx.run_id, retry_count=att, latency_ms=dur)
         # Live visualization event
         if self.event_bus:
@@ -579,6 +598,14 @@ class Swarm:
         self.skill_bank.record_failure(error, task.description, task.role)
         self.skill_bank.record_active_outcome(active, False, ctx.run_id, task_class)
         self.skill_bank.record_shadow_outcome(shadow, False, ctx.run_id, retry_count=att, latency_ms=0.0)
+        # Escalation check: 3+ failures on same pattern → architecture review needed
+        if self.skill_bank._fc.needs_escalation(str(error)):
+            self._emit(SwarmEvent.AGENT_FAILED, {
+                "task_id": task.id,
+                "escalation": "architecture_review_needed",
+                "message": f"Task pattern failed 3+ times. Consider architectural change.",
+                "failure_count": self.skill_bank._fc._task_attempts[self.skill_bank._fc._norm(str(error))],
+            })
         # Live visualization event
         if self.event_bus:
             self.event_bus.task_failed(str(ctx.run_id), task.id, error[:100] if error else "unknown")
@@ -608,8 +635,84 @@ class Swarm:
             ctx.errors["evolution_failed"] += 1; self.metrics.evolution_rejected += 1
             logger.warning("Evolution failed: %s", exc)
 
+    def _check_gate(self, gate: Dict, task, dep_ctx: str) -> bool:
+        """Check if a gate condition is met based on dependency context."""
+        gate_type = gate.get("type", "keyword")
+        if gate_type == "approval":
+            return "approved" in dep_ctx.lower() or "accepted" in dep_ctx.lower()
+        elif gate_type == "keyword":
+            condition = gate.get("condition", "")
+            keywords = [k.strip() for k in condition.split("|")]
+            return any(kw.lower() in dep_ctx.lower() for kw in keywords if kw)
+        return True  # unknown gate type passes
+
+    def _detect_wave_conflicts(self, tasks_list: List[SubTask]) -> List[Dict]:
+        """Detect shared state between tasks using ontology produces/requires."""
+        conflicts = []
+        for i, t1 in enumerate(tasks_list):
+            for t2 in tasks_list[i + 1:]:
+                t1_term = self.ontology.resolve_by_label(t1.role.lower().split()[0]) or self.ontology.resolve_by_label(t1.role)
+                t2_term = self.ontology.resolve_by_label(t2.role.lower().split()[0]) or self.ontology.resolve_by_label(t2.role)
+                if t1_term and t2_term:
+                    t1_produces = self.ontology.task_produces(t1_term.id)
+                    t2_requires = self.ontology.task_requires(t2_term.id)
+                    t2_produces = self.ontology.task_produces(t2_term.id)
+                    t1_requires = self.ontology.task_requires(t1_term.id)
+                    shared = (t1_produces & t2_requires) | (t2_produces & t1_requires)
+                    if shared:
+                        conflicts.append({
+                            "task_a": t1.id, "task_b": t2.id,
+                            "shared_artifacts": list(shared),
+                            "reason": "produces/requires overlap",
+                        })
+        return conflicts
+
+    def _partition_by_conflicts(self, tasks_list, conflicts):
+        """Split tasks into independent (safe to parallelize) and serialized groups."""
+        conflicting_ids = set()
+        for c in conflicts:
+            conflicting_ids.add(c["task_a"])
+            conflicting_ids.add(c["task_b"])
+        independent = [t for t in tasks_list if t.id not in conflicting_ids]
+        serialized = [t for t in tasks_list if t.id in conflicting_ids]
+        return independent, serialized
+
     async def _exec_wave(self, ctx, wn, tids, tasks, gi):
         self._emit(SwarmEvent.WAVE_STARTED, {"wave": wn, "count": len(tids)})
+
+        # Check for shared state conflicts within wave using ontology
+        wave_tasks_list = [tasks[tid] for tid in tids]
+        if self.ontology and len(tids) > 1:
+            conflicts = self._detect_wave_conflicts(wave_tasks_list)
+            if conflicts:
+                self._emit(SwarmEvent.WAVE_STARTED, {
+                    "wave": wn, "conflicts": conflicts,
+                    "action": "serializing_conflicting_tasks",
+                })
+                independent, serialized = self._partition_by_conflicts(wave_tasks_list, conflicts)
+                ind_tids = [t.id for t in independent]
+                ser_tasks = serialized
+
+                # Run independent tasks in parallel
+                sem = asyncio.Semaphore(self.plan.max_concurrent)
+                wr = [None] * len(ind_tids)
+                async def g_ind(s, tid):
+                    async with sem:
+                        t = tasks[tid]; dc = self._gather_dep_ctx(t, ctx)
+                        r = await self._exec_slot(ctx, gi + s, t, dc, wn); wr[s] = r; ctx.results[tid] = r
+                if ind_tids:
+                    await asyncio.gather(*[g_ind(s, tid) for s, tid in enumerate(ind_tids)])
+                ind_results = [r for r in wr if r]
+
+                # Run serialized tasks sequentially
+                ser_results = []
+                for s_idx, t in enumerate(ser_tasks):
+                    dc = self._gather_dep_ctx(t, ctx)
+                    r = await self._exec_slot(ctx, gi + len(ind_tids) + s_idx, t, dc, wn)
+                    ser_results.append(r); ctx.results[t.id] = r
+
+                return ind_results + ser_results, gi + len(tids)
+
         sem = asyncio.Semaphore(self.plan.max_concurrent); wr = [None] * len(tids)
         async def g(s, tid):
             async with sem:
@@ -628,6 +731,19 @@ class Swarm:
                 r = await self._exec_slot(ctx, gi + s, t, dc, wn); wr[s] = r; ctx.results[tid] = r
         await asyncio.gather(*[g(s, t) for s, t in enumerate(tids)])
         return [r for r in wr if r], gi + len(tids)
+
+    def _gather_dep_ctx(self, task, ctx):
+        """Gather dependency context for a task."""
+        if not task.dependencies:
+            return None
+        dc = {}
+        for d in task.dependencies:
+            dr = ctx.results.get(d)
+            if dr and dr.success:
+                dc[d] = dr.output or ""
+            else:
+                dc[d] = f"[UNAVAILABLE:{d}]"
+        return dc
 
     def _aggregate(self, results):
         sr = sorted(results, key=lambda r: r.index); lines = []; errs = []
