@@ -270,7 +270,7 @@ class TrackerAdapter:
             def log_message(self, format, *args):
                 pass  # Suppress HTTP logs
 
-        server = HTTPServer(("0.0.0.0", port), Handler)
+        server = HTTPServer(("127.0.0.1", port), Handler)
         if background:
             t = threading.Thread(target=server.serve_forever, daemon=True)
             t.start()

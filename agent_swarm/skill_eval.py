@@ -141,7 +141,7 @@ class SkillEvaluator:
             SkillEvalReport with per-skill deltas
         """
         start = time.time()
-        bank = self._swarm._skill_bank
+        bank = self._swarm.skill_bank
         if bank is None:
             return SkillEvalReport(goal=goal)
 
@@ -165,7 +165,7 @@ class SkillEvaluator:
 
             # B: Without this skill (temporarily remove)
             original_state = skill.state
-            skill.state = type(skill.state)("disabled") if hasattr(skill.state, "value") else "disabled"
+            skill.state = type(skill.state)("inactive") if hasattr(skill.state, "value") else "inactive"
 
             without_results = []
             for _ in range(runs):

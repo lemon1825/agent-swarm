@@ -149,7 +149,7 @@ class WorkspaceExporter:
             return [{"name": s.name, "principle": s.principle,
                      "when_to_apply": s.when_to_apply,
                      "state": s.state.value if hasattr(s.state, 'value') else str(s.state),
-                     "usage_count": s.usage_count, "success_count": s.success_count,
+                     "usage_count": s.hit_count, "success_count": s.helped_count,
                      "fitness": getattr(s, 'fitness', 0)}
                     for s in bank._all()]
         except Exception:

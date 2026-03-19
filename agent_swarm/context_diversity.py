@@ -125,7 +125,7 @@ class ContextDiversityScorer:
         dep_map = {}
         for tid, r in results.items():
             output_map[tid] = r.output or "" if r.success else ""
-            dep_map[tid] = getattr(r, "dependencies", []) or []
+            dep_map[tid] = []  # TaskResult has no dependencies field
 
         # Score each agent
         agent_scores = []

@@ -60,6 +60,7 @@ def auto_tools(llm: Callable, tools: List = None, max_tool_rounds: int = 3) -> C
         augmented = prompt + instruction
 
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        output = ""
 
         for round_num in range(max_tool_rounds + 1):
             # Call LLM

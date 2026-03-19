@@ -20,6 +20,7 @@ __all__ = ['Workspace', 'WorkspaceManager']
 import glob
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -40,19 +41,23 @@ class Workspace:
 
     def write_file(self, name: str, content: str) -> str:
         """Write a file into the workspace."""
-        fpath = os.path.join(self.path, name)
-        os.makedirs(os.path.dirname(fpath), exist_ok=True)
-        with open(fpath, "w") as f:
+        resolved = os.path.realpath(os.path.join(self.path, name))
+        if not resolved.startswith(os.path.realpath(self.path)):
+            raise ValueError(f"Path traversal blocked: '{name}' escapes workspace")
+        os.makedirs(os.path.dirname(resolved), exist_ok=True)
+        with open(resolved, "w") as f:
             f.write(content)
         self.files_written.append(name)
-        return fpath
+        return resolved
 
     def read_file(self, name: str) -> Optional[str]:
         """Read a file from the workspace."""
-        fpath = os.path.join(self.path, name)
-        if not os.path.isfile(fpath):
+        resolved = os.path.realpath(os.path.join(self.path, name))
+        if not resolved.startswith(os.path.realpath(self.path)):
+            raise ValueError(f"Path traversal blocked: '{name}' escapes workspace")
+        if not os.path.isfile(resolved):
             return None
-        with open(fpath, "r", errors="replace") as f:
+        with open(resolved, "r", errors="replace") as f:
             return f.read()
 
     def list_files(self, pattern: str = "*") -> List[str]:
@@ -65,7 +70,7 @@ class Workspace:
         """Execute a shell command inside the workspace."""
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
+                shlex.split(command), capture_output=True, text=True,
                 timeout=timeout, cwd=self.path,
             )
             record = {

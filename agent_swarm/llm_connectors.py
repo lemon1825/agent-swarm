@@ -162,7 +162,10 @@ def ollama(model: str = "llama3", base_url: str = "http://localhost:11434",
         )
 
         import asyncio
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
         resp = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=120))
         body = json.loads(resp.read().decode())
 

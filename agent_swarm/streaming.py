@@ -145,8 +145,7 @@ class StreamingAdapter:
                     return raw
                 else:
                     # Sync generator or other
-                    raw = await asyncio.ensure_future(result) if asyncio.iscoroutine(result) else result
-                    return str(raw) if raw is not None else ""
+                    return str(result) if result is not None else ""
             except Exception as e:
                 adapter._emit_event(StreamEvent("error", task_id, str(e)))
                 raise

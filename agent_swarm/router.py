@@ -15,7 +15,6 @@ Usage:
 """
 
 __all__ = ['_STRONG_SIGNALS', '_FAST_SIGNALS', 'SmartRouter']
-import re
 from typing import Any, Callable, Dict, Optional
 
 

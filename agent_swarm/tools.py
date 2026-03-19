@@ -30,6 +30,7 @@ import html
 import json
 import os
 import re
+import shlex
 import subprocess
 import urllib.parse
 import urllib.request
@@ -199,9 +200,14 @@ def _file_read(path: str, max_lines: str = "500") -> str:
         return f"File read failed: {e}"
 
 
-def _file_write(path: str, content: str) -> str:
+def _file_write(path: str, content: str, base_dir: str = None) -> str:
     """Write content to a local file."""
     try:
+        if base_dir:
+            resolved = os.path.realpath(os.path.join(base_dir, path))
+            if not resolved.startswith(os.path.realpath(base_dir)):
+                return f"File write blocked: path '{path}' escapes base directory"
+            path = resolved
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             f.write(content)
@@ -215,7 +221,7 @@ def _shell_exec(command: str, timeout: str = "30") -> str:
     try:
         to = min(int(timeout), 120)
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
+            shlex.split(command), capture_output=True, text=True,
             timeout=to, cwd=os.getcwd()
         )
         output = ""

@@ -24,6 +24,7 @@ import json
 import time
 import threading
 import queue
+import concurrent.futures
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
 
@@ -156,24 +157,23 @@ class HttpEventBridge:
 
     def __init__(self, url: str = "http://localhost:8000/events/push"):
         self.url = url
-        self._thread = None
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
     def send(self, event: Event):
-        """Send event to Pro API (fire-and-forget in background thread)."""
-        def _post():
-            try:
-                import urllib.request
-                data = event.to_json().encode()
-                req = urllib.request.Request(
-                    self.url, data=data, method="POST",
-                    headers={"Content-Type": "application/json"}
-                )
-                urllib.request.urlopen(req, timeout=2)
-            except Exception:
-                pass  # Silently fail — visualization is optional
+        """Send event to Pro API (fire-and-forget in thread pool)."""
+        self._executor.submit(self._do_send, event)
 
-        t = threading.Thread(target=_post, daemon=True)
-        t.start()
+    def _do_send(self, event: Event):
+        try:
+            import urllib.request
+            data = event.to_json().encode()
+            req = urllib.request.Request(
+                self.url, data=data, method="POST",
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=2)
+        except Exception:
+            pass  # Silently fail — visualization is optional
 
 
 # Global default bus
