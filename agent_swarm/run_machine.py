@@ -213,6 +213,7 @@ class ProofBundle:
                      "time_s": self.execution_time_s, "llm_calls": self.llm_calls},
             "skills": {"evolved": self.skills_evolved, "promoted": self.skills_promoted},
             "next_steps": self.next_steps,
+            "follow_up_runs": self.follow_up_runs,
             "created_at": self.created_at, "completed_at": self.completed_at,
         }
         return d
@@ -238,6 +239,9 @@ class ProofBundle:
                 entry["error"] = tr.error or "; ".join(tr.validation_failures)
                 failed.append(entry)
 
+        tests_meta = meta.get("tests", {})
+        approval_meta = meta.get("approval", {})
+
         return cls(
             run_id=run_id, goal=goal,
             trigger=trigger, trigger_ref=trigger_ref,
@@ -247,15 +251,69 @@ class ProofBundle:
             execution_time_s=meta.get("execution_time_s", 0),
             llm_calls=meta.get("llm_calls_used", 0),
             ontology_violations=[str(w) for w in meta.get("plan_quality", {}).get("ontology_warnings", [])],
-            skills_evolved=[],
+            tests_run=tests_meta.get("run", 0),
+            tests_passed=tests_meta.get("passed", 0),
+            tests_failed=tests_meta.get("failed", 0),
+            files_changed=meta.get("files_changed", []),
+            artifacts=meta.get("artifacts", []),
+            validation_summary=meta.get("validation_summary", ""),
+            approval_status=approval_meta.get("status", "none"),
+            approved_by=approval_meta.get("by", ""),
+            approval_notes=approval_meta.get("notes", ""),
+            skills_evolved=meta.get("skills_evolved", []),
+            skills_promoted=meta.get("skills_promoted", []),
             next_steps=meta.get("next_steps", []),
+            follow_up_runs=meta.get("follow_up_runs", []),
+        )
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> 'ProofBundle':
+        """Restore a ProofBundle from a persisted dict (to_dict output)."""
+        tests = d.get("tests", {})
+        approval = d.get("approval", {})
+        cost = d.get("cost", {})
+        skills = d.get("skills", {})
+        history = [
+            StateTransition(
+                from_state=t.get("from", ""), to_state=t.get("to", ""),
+                reason=t.get("reason", ""), actor=t.get("actor", "system"),
+                timestamp=t.get("timestamp", 0),
+            )
+            for t in d.get("state_history", [])
+        ]
+        return cls(
+            run_id=d.get("run_id", ""), goal=d.get("goal", ""),
+            trigger=d.get("trigger", ""), trigger_ref=d.get("trigger_ref", ""),
+            state=d.get("state", "queued"), state_history=history,
+            tasks_completed=d.get("tasks_completed", []),
+            tasks_failed=d.get("tasks_failed", []),
+            files_changed=d.get("files_changed", []),
+            artifacts=d.get("artifacts", []),
+            tests_run=tests.get("run", 0),
+            tests_passed=tests.get("passed", 0),
+            tests_failed=tests.get("failed", 0),
+            validation_summary=d.get("validation_summary", ""),
+            ontology_violations=d.get("ontology_violations", []),
+            approval_status=approval.get("status", ""),
+            approved_by=approval.get("by", ""),
+            approval_notes=approval.get("notes", ""),
+            total_tokens=cost.get("tokens", 0),
+            total_cost_usd=cost.get("usd", 0),
+            execution_time_s=cost.get("time_s", 0),
+            llm_calls=cost.get("llm_calls", 0),
+            skills_evolved=skills.get("evolved", []),
+            skills_promoted=skills.get("promoted", []),
+            next_steps=d.get("next_steps", []),
+            follow_up_runs=d.get("follow_up_runs", []),
+            created_at=d.get("created_at", 0),
+            completed_at=d.get("completed_at", 0),
         )
 
 
 @dataclass
 class RunConfig:
     """Configuration for submitting a run."""
-    goal: str
+    goal: str = ""
     tasks: List = field(default_factory=list)
     trigger: str = "manual"         # manual, github_issue, webhook, schedule, linear
     trigger_ref: str = ""           # issue#42, webhook_id
@@ -343,7 +401,8 @@ class RunMachine:
                  "created": r.created_at} for r in sorted(runs, key=lambda r: r.created_at, reverse=True)]
 
     def queue_size(self) -> int:
-        return len([r for r in self._queue if self._runs[r].state == RunState.QUEUED])
+        return len([r for r in self._queue
+                    if self._runs[r].state in (RunState.QUEUED, RunState.RETRYING)])
 
     async def execute(self, run_id: str, swarm, approval_callback: Callable = None):
         """Execute a run through the full state machine (iterative, no recursion)."""
@@ -485,6 +544,7 @@ class RunMachine:
     def _transition(self, run: Run, new_state: RunState, reason: str, actor: str = "system"):
         old = run.state
         if run.transition(new_state, reason, actor):
+            self._persist_run(run)
             for cb in self._on_state_change:
                 try:
                     cb(run.id, old.value, new_state.value, reason)
@@ -498,8 +558,16 @@ class RunMachine:
         with open(path, "w") as f:
             json.dump({
                 "id": run.id, "state": run.state.value,
-                "config": {"goal": run.config.goal, "trigger": run.config.trigger,
-                           "trigger_ref": run.config.trigger_ref, "priority": run.config.priority},
+                "config": {
+                    "goal": run.config.goal, "trigger": run.config.trigger,
+                    "trigger_ref": run.config.trigger_ref, "priority": run.config.priority,
+                    "playbook": run.config.playbook, "pack": run.config.pack,
+                    "context": run.config.context,
+                    "requires_approval": run.config.requires_approval,
+                    "max_retries": run.config.max_retries,
+                    "workspace_id": run.config.workspace_id,
+                    "metadata": run.config.metadata,
+                },
                 "proof": run.proof.to_dict(),
                 "retry_count": run.retry_count,
                 "created_at": run.created_at,
@@ -514,12 +582,29 @@ class RunMachine:
             try:
                 with open(os.path.join(self._persist_dir, fname)) as f:
                     data = json.load(f)
-                config = RunConfig(goal=data["config"]["goal"],
-                                   trigger=data["config"].get("trigger", "manual"),
-                                   trigger_ref=data["config"].get("trigger_ref", ""))
+                cfg = data["config"]
+                config = RunConfig(
+                    goal=cfg["goal"],
+                    trigger=cfg.get("trigger", "manual"),
+                    trigger_ref=cfg.get("trigger_ref", ""),
+                    priority=cfg.get("priority", 5),
+                    playbook=cfg.get("playbook", ""),
+                    pack=cfg.get("pack", ""),
+                    context=cfg.get("context", ""),
+                    requires_approval=cfg.get("requires_approval", False),
+                    max_retries=cfg.get("max_retries", 2),
+                    workspace_id=cfg.get("workspace_id", ""),
+                    metadata=cfg.get("metadata", {}),
+                )
+                proof_data = data.get("proof")
+                proof = ProofBundle.from_dict(proof_data) if proof_data else ProofBundle()
                 run = Run(id=data["id"], config=config,
                           state=RunState(data["state"]),
+                          proof=proof,
+                          retry_count=data.get("retry_count", 0),
                           created_at=data.get("created_at", 0))
                 self._runs[run.id] = run
+                if run.state == RunState.RETRYING:
+                    self._queue.append(run.id)
             except Exception:
                 pass
