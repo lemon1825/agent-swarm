@@ -235,14 +235,30 @@ class TrackerAdapter:
 
     # ── HTTP Server (lightweight webhook receiver) ──
 
-    def start_server(self, port: int = 9000, background: bool = True):
-        """Start a lightweight HTTP server to receive webhooks."""
+    def start_server(self, port: int = 9000, background: bool = True, webhook_secret: str = None):
+        """Start a lightweight HTTP server to receive webhooks.
+        If webhook_secret is set, requests must include valid HMAC signature."""
         adapter = self
+        secret = webhook_secret
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(length).decode("utf-8", errors="replace")
+
+                # HMAC signature verification (GitHub-style X-Hub-Signature-256)
+                if secret:
+                    import hmac as _hmac, hashlib as _hashlib
+                    sig_header = self.headers.get("X-Hub-Signature-256", "")
+                    expected = "sha256=" + _hmac.new(
+                        secret.encode(), body.encode(), _hashlib.sha256
+                    ).hexdigest()
+                    if not _hmac.compare_digest(sig_header, expected):
+                        self.send_response(403)
+                        self.end_headers()
+                        self.wfile.write(b'{"error":"Invalid signature"}')
+                        return
+
                 try:
                     payload = json.loads(body)
                 except Exception:

@@ -346,111 +346,117 @@ class RunMachine:
         return len([r for r in self._queue if self._runs[r].state == RunState.QUEUED])
 
     async def execute(self, run_id: str, swarm, approval_callback: Callable = None):
-        """Execute a run through the full state machine."""
+        """Execute a run through the full state machine (iterative, no recursion)."""
         run = self._runs.get(run_id)
         if not run:
             raise ValueError(f"Run not found: {run_id}")
 
-        try:
-            # PLANNING
-            self._transition(run, RunState.PLANNING, "Starting execution")
+        while True:
+            try:
+                # PLANNING
+                self._transition(run, RunState.PLANNING, "Starting execution")
 
-            # IMPLEMENTING
-            self._transition(run, RunState.IMPLEMENTING, "Plan ready, executing tasks")
+                # IMPLEMENTING
+                self._transition(run, RunState.IMPLEMENTING, "Plan ready, executing tasks")
 
-            result = await swarm.run(
-                run.config.goal,
-                tasks=run.config.tasks if run.config.tasks else None,
-                context=run.config.context,
-                playbook=run.config.playbook or None,
-            )
+                result = await swarm.run(
+                    run.config.goal,
+                    tasks=run.config.tasks if run.config.tasks else None,
+                    context=run.config.context,
+                    playbook=run.config.playbook or None,
+                )
 
-            # Build proof from result
-            proof = ProofBundle.from_result(run.id, run.config.goal, result,
-                                           run.config.trigger, run.config.trigger_ref)
-            # Merge into existing proof (keep state history)
-            history = run.proof.state_history
-            run.proof = proof
-            run.proof.state_history = history
-            run.proof.state = run.state.value
+                # Build proof from result
+                proof = ProofBundle.from_result(run.id, run.config.goal, result,
+                                               run.config.trigger, run.config.trigger_ref)
+                # Merge into existing proof (keep state history)
+                history = run.proof.state_history
+                run.proof = proof
+                run.proof.state_history = history
+                run.proof.state = run.state.value
 
-            # TESTING
-            self._transition(run, RunState.TESTING, f"{proof.tests_passed}/{proof.tests_run} tests")
+                # TESTING
+                self._transition(run, RunState.TESTING, f"{proof.tests_passed}/{proof.tests_run} tests")
 
-            # REVIEWING — run review gates if configured
-            if self._review_gates:
-                self._transition(run, RunState.REVIEWING, "entering review gates")
-                review_blocked = False
-                for gate in self._review_gates:
-                    try:
-                        result = await gate.reviewer(run.id, run.proof)
-                    except Exception as exc:
-                        result = ReviewResult(passed=False, issues=[f"Gate error: {exc}"], severity="critical")
-                    run.proof.review_results.append({
-                        "gate": gate.name, "passed": result.passed,
-                        "issues": result.issues, "severity": result.severity,
-                    })
-                    if gate.required and not result.passed:
-                        review_blocked = True
-                        break
-                if review_blocked:
+                # REVIEWING — run review gates if configured
+                if self._review_gates:
+                    self._transition(run, RunState.REVIEWING, "entering review gates")
+                    review_blocked = False
+                    for gate in self._review_gates:
+                        try:
+                            result = await gate.reviewer(run.id, run.proof)
+                        except Exception as exc:
+                            result = ReviewResult(passed=False, issues=[f"Gate error: {exc}"], severity="critical")
+                        run.proof.review_results.append({
+                            "gate": gate.name, "passed": result.passed,
+                            "issues": result.issues, "severity": result.severity,
+                        })
+                        if gate.required and not result.passed:
+                            review_blocked = True
+                            break
+                    if review_blocked:
+                        self._transition(run, RunState.AWAITING_APPROVAL,
+                                         f"Review gate '{gate.name}' failed, needs review")
+                        run.proof.approval_status = "pending"
+                        if approval_callback:
+                            approved = await approval_callback(run.id, run.proof.summary())
+                            if approved:
+                                run.proof.approval_status = "approved"
+                                run.proof.approved_by = "callback"
+                                self._transition(run, RunState.COMPLETED, "Approved after review failure")
+                            else:
+                                run.proof.approval_status = "rejected"
+                                self._transition(run, RunState.REJECTED, "Rejected after review failure")
+                        run.proof.completed_at = time.time()
+                        self._persist_run(run)
+                        return run.proof
+
+                has_failures = len(proof.tasks_failed) > 0
+                should_retry = False
+
+                # APPROVAL
+                if run.config.requires_approval or has_failures:
                     self._transition(run, RunState.AWAITING_APPROVAL,
-                                     f"Review gate '{gate.name}' failed, needs review")
+                                     "Approval required" if run.config.requires_approval else "Has failures, needs review")
                     run.proof.approval_status = "pending"
+
                     if approval_callback:
                         approved = await approval_callback(run.id, run.proof.summary())
                         if approved:
                             run.proof.approval_status = "approved"
                             run.proof.approved_by = "callback"
-                            self._transition(run, RunState.COMPLETED, "Approved after review failure")
+                            self._transition(run, RunState.COMPLETED, "Approved")
                         else:
                             run.proof.approval_status = "rejected"
-                            self._transition(run, RunState.REJECTED, "Rejected after review failure")
-                    run.proof.completed_at = time.time()
-                    self._persist_run(run)
-                    return run.proof
-
-            has_failures = len(proof.tasks_failed) > 0
-
-            # APPROVAL
-            if run.config.requires_approval or has_failures:
-                self._transition(run, RunState.AWAITING_APPROVAL,
-                                 "Approval required" if run.config.requires_approval else "Has failures, needs review")
-                run.proof.approval_status = "pending"
-
-                if approval_callback:
-                    approved = await approval_callback(run.id, run.proof.summary())
-                    if approved:
-                        run.proof.approval_status = "approved"
-                        run.proof.approved_by = "callback"
-                        self._transition(run, RunState.COMPLETED, "Approved")
+                            self._transition(run, RunState.REJECTED, "Rejected by approver")
+                            if run.retry_count < run.config.max_retries:
+                                run.retry_count += 1
+                                self._transition(run, RunState.RETRYING, f"Retry {run.retry_count}/{run.config.max_retries}")
+                                should_retry = True
+                    # If no callback, stay in AWAITING_APPROVAL
+                elif not has_failures:
+                    self._transition(run, RunState.COMPLETED, f"{len(proof.tasks_completed)} tasks succeeded")
+                else:
+                    # Failures but no approval required — retry or fail
+                    if run.retry_count < run.config.max_retries:
+                        run.retry_count += 1
+                        self._transition(run, RunState.RETRYING, f"Retry {run.retry_count}/{run.config.max_retries}")
+                        should_retry = True
                     else:
-                        run.proof.approval_status = "rejected"
-                        self._transition(run, RunState.REJECTED, "Rejected by approver")
-                        if run.retry_count < run.config.max_retries:
-                            run.retry_count += 1
-                            self._transition(run, RunState.RETRYING, f"Retry {run.retry_count}/{run.config.max_retries}")
-                            return await self.execute(run_id, swarm, approval_callback)
-                # If no callback, stay in AWAITING_APPROVAL
-            elif not has_failures:
-                self._transition(run, RunState.COMPLETED, f"{len(proof.tasks_completed)} tasks succeeded")
-            else:
-                # Failures but no approval required — retry or fail
-                if run.retry_count < run.config.max_retries:
-                    run.retry_count += 1
-                    self._transition(run, RunState.RETRYING, f"Retry {run.retry_count}/{run.config.max_retries}")
-                    return await self.execute(run_id, swarm, approval_callback)
-                self._transition(run, RunState.FAILED, f"{len(proof.tasks_failed)} tasks failed, retries exhausted")
+                        self._transition(run, RunState.FAILED, f"{len(proof.tasks_failed)} tasks failed, retries exhausted")
 
-            run.proof.completed_at = time.time()
-            self._persist_run(run)
-            return run.proof
+                if should_retry:
+                    continue  # Loop instead of recursive call
 
-        except Exception as e:
-            self._transition(run, RunState.FAILED, f"Exception: {str(e)[:100]}")
-            run.proof.completed_at = time.time()
-            self._persist_run(run)
-            raise
+                run.proof.completed_at = time.time()
+                self._persist_run(run)
+                return run.proof
+
+            except Exception as e:
+                self._transition(run, RunState.FAILED, f"Exception: {str(e)[:100]}")
+                run.proof.completed_at = time.time()
+                self._persist_run(run)
+                raise
 
     def approve(self, run_id: str, approved: bool, by: str = "user", notes: str = "") -> bool:
         """Manually approve/reject a run in AWAITING_APPROVAL state."""

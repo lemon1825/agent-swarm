@@ -14,16 +14,17 @@ Usage:
 __all__ = ['LLMCache', 'cached_llm']
 import hashlib
 import time
+from collections import OrderedDict
 from typing import Any, Callable, Dict, Optional, Tuple
 
 
 class LLMCache:
-    """In-memory LLM response cache with TTL and size limit."""
+    """In-memory LLM response cache with TTL and size limit (O(1) LRU eviction)."""
 
     def __init__(self, max_size: int = 500, ttl_seconds: float = 3600):
         self.max_size = max_size
         self.ttl = ttl_seconds
-        self._cache: Dict[str, Dict] = {}  # key → {value, usage, timestamp}
+        self._cache: OrderedDict[str, Dict] = OrderedDict()  # LRU order
         self.hits = 0
         self.misses = 0
 
@@ -44,14 +45,14 @@ class LLMCache:
             self.misses += 1
             return None
         self.hits += 1
+        self._cache.move_to_end(key)  # Mark as recently used
         return entry["value"], entry.get("usage")
 
     def put(self, prompt: str, value: str, usage: Optional[Dict] = None, tools: Any = None):
         key = self._key(prompt, tools)
         if len(self._cache) >= self.max_size:
-            # Evict oldest entry
-            oldest_key = min(self._cache, key=lambda k: self._cache[k]["timestamp"])
-            del self._cache[oldest_key]
+            # Evict LRU entry (O(1) with OrderedDict)
+            self._cache.popitem(last=False)
         self._cache[key] = {"value": value, "usage": usage, "timestamp": time.time()}
 
     def clear(self):

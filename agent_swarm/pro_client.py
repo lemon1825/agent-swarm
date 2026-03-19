@@ -283,8 +283,9 @@ class ProClient:
             for event in client.events(timeout=60):
                 print(event)
         """
-        url = f"{self.server}/api/events/stream?api_key={self.api_key}"
+        url = f"{self.server}/api/events/stream"
         req = urllib.request.Request(url)
+        req.add_header("Authorization", f"Bearer {self.api_key}")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 buffer = ""

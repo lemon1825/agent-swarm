@@ -154,9 +154,34 @@ def _web_search(query: str, max_results: str = "5") -> str:
         return f"Search failed: {e}"
 
 
+def _validate_url(url: str) -> Optional[str]:
+    """Validate URL to prevent SSRF. Returns error message or None if safe."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return "Invalid URL format"
+    if parsed.scheme not in ("http", "https"):
+        return f"Blocked URL scheme: {parsed.scheme} (only http/https allowed)"
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return "Missing hostname"
+    # Block private/internal IPs and cloud metadata
+    blocked = ("localhost", "127.", "10.", "172.16.", "172.17.", "172.18.", "172.19.",
+               "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+               "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+               "192.168.", "169.254.", "0.", "[::1]", "metadata.google",
+               "metadata.aws", "100.100.100.200")
+    if any(hostname.startswith(b) or hostname == b.rstrip(".") for b in blocked):
+        return f"Blocked internal/private URL: {hostname}"
+    return None
+
+
 def _http_fetch(url: str, max_length: str = "5000") -> str:
     """Fetch URL content and extract text."""
     try:
+        url_err = _validate_url(url)
+        if url_err:
+            return f"Fetch blocked: {url_err}"
         ml = min(int(max_length), 50000)
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; AgentSwarm/1.0)"
@@ -201,13 +226,16 @@ def _file_read(path: str, max_lines: str = "500") -> str:
 
 
 def _file_write(path: str, content: str, base_dir: str = None) -> str:
-    """Write content to a local file."""
+    """Write content to a local file. Requires base_dir for safety."""
     try:
-        if base_dir:
-            resolved = os.path.realpath(os.path.join(base_dir, path))
-            if not resolved.startswith(os.path.realpath(base_dir)):
-                return f"File write blocked: path '{path}' escapes base directory"
-            path = resolved
+        if base_dir is None:
+            base_dir = os.getcwd()
+        resolved = os.path.realpath(os.path.join(base_dir, path))
+        if not resolved.startswith(os.path.realpath(base_dir)):
+            return f"File write blocked: path '{path}' escapes base directory '{base_dir}'"
+        if os.path.isabs(path) and not path.startswith(os.path.realpath(base_dir)):
+            return f"File write blocked: absolute path '{path}' outside base directory"
+        path = resolved
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             f.write(content)
@@ -216,12 +244,33 @@ def _file_write(path: str, content: str, base_dir: str = None) -> str:
         return f"File write failed: {e}"
 
 
+_BLOCKED_COMMANDS = frozenset({
+    "rm", "rmdir", "del", "format", "mkfs", "dd",
+    "curl", "wget", "nc", "ncat", "netcat",
+    "chmod", "chown", "chgrp", "sudo", "su",
+    "shutdown", "reboot", "halt", "poweroff",
+    "kill", "killall", "pkill",
+})
+
+_BLOCKED_PATTERNS = ("| sh", "| bash", "| zsh", "> /dev/", "| curl", "| wget",
+                     "$(",  "`", "&&rm", "; rm", ";rm")
+
+
 def _shell_exec(command: str, timeout: str = "30") -> str:
-    """Execute a shell command with timeout."""
+    """Execute a shell command with timeout. Blocks dangerous commands."""
     try:
+        # Check blocklist
+        parts = shlex.split(command)
+        base_cmd = os.path.basename(parts[0]).lower() if parts else ""
+        if base_cmd in _BLOCKED_COMMANDS:
+            return f"Shell exec blocked: '{base_cmd}' is not allowed"
+        cmd_lower = command.lower()
+        for pat in _BLOCKED_PATTERNS:
+            if pat in cmd_lower:
+                return f"Shell exec blocked: dangerous pattern detected"
         to = min(int(timeout), 120)
         result = subprocess.run(
-            shlex.split(command), capture_output=True, text=True,
+            parts, capture_output=True, text=True,
             timeout=to, cwd=os.getcwd()
         )
         output = ""

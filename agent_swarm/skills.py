@@ -363,7 +363,8 @@ class SkillBank:
                 "failure_patterns": len(self._fc.get_clusters(2)),
                 "by_source": {src: sum(1 for s in a if s.source == src) for src in ("success", "failure", "evolution", "manual")}}
 
-    def _all(self): return self.general + [s for sl in self.specific.values() for s in sl]
+    def all_skills(self): return self.general + [s for sl in self.specific.values() for s in sl]
+    def _all(self): return self.all_skills()  # backward compat
     @property
     def total_count(self): return len(self._all())
     @staticmethod
