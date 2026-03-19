@@ -130,25 +130,27 @@ async def _mock_llm(prompt, tools=None):
     return f"Mock response for: {prompt[:30]}"
 
 
-@pytest.mark.asyncio
-async def test_agent_execute_returns_string():
-    agent = Agent(name="test", role="Worker", llm=_mock_llm)
-    task = SubTask(id="t1", description="Do work")
-    output, usage = await agent.execute(task)
-    assert isinstance(output, str)
-    assert "Mock response" in output
-    assert usage is None
+def test_agent_execute_returns_string():
+    async def _run():
+        agent = Agent(name="test", role="Worker", llm=_mock_llm)
+        task = SubTask(id="t1", description="Do work")
+        output, usage = await agent.execute(task)
+        assert isinstance(output, str)
+        assert "Mock response" in output
+        assert usage is None
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_agent_execute_with_usage():
-    async def llm_with_usage(prompt, tools=None):
-        return ("result", {"total_tokens": 100})
-    agent = Agent(name="test", role="Worker", llm=llm_with_usage)
-    task = SubTask(id="t1", description="Do work")
-    output, usage = await agent.execute(task)
-    assert output == "result"
-    assert usage["total_tokens"] == 100
+def test_agent_execute_with_usage():
+    async def _run():
+        async def llm_with_usage(prompt, tools=None):
+            return ("result", {"total_tokens": 100})
+        agent = Agent(name="test", role="Worker", llm=llm_with_usage)
+        task = SubTask(id="t1", description="Do work")
+        output, usage = await agent.execute(task)
+        assert output == "result"
+        assert usage["total_tokens"] == 100
+    asyncio.run(_run())
 
 
 # ── RunContext ──
@@ -192,89 +194,95 @@ def test_run_context_save_phase():
 
 # ── Swarm ──
 
-@pytest.mark.asyncio
-async def test_swarm_run_simple_tasks():
-    swarm = Swarm(llm=_mock_llm)
-    tasks = [
-        SubTask(id="t1", description="research topic"),
-        SubTask(id="t2", description="write summary", dependencies=["t1"]),
-    ]
-    result = await swarm.run("research and write", tasks=tasks)
-    assert result["metadata"]["total_tasks"] == 2
-    assert result["metadata"]["succeeded"] == 2
-    assert "t1" in result["results"]
-    assert "t2" in result["results"]
+def test_swarm_run_simple_tasks():
+    async def _run():
+        swarm = Swarm(llm=_mock_llm)
+        tasks = [
+            SubTask(id="t1", description="research topic"),
+            SubTask(id="t2", description="write summary", dependencies=["t1"]),
+        ]
+        result = await swarm.run("research and write", tasks=tasks)
+        assert result["metadata"]["total_tasks"] == 2
+        assert result["metadata"]["succeeded"] == 2
+        assert "t1" in result["results"]
+        assert "t2" in result["results"]
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_swarm_run_parallel_wave():
-    swarm = Swarm(llm=_mock_llm)
-    tasks = [
-        SubTask(id="a", description="task alpha", role="Researcher"),
-        SubTask(id="b", description="task beta", role="Analyst"),
-        SubTask(id="c", description="combine", role="Writer", dependencies=["a", "b"]),
-    ]
-    result = await swarm.run("parallel test", tasks=tasks)
-    assert result["metadata"]["waves"] == 2
-    assert result["metadata"]["succeeded"] == 3
+def test_swarm_run_parallel_wave():
+    async def _run():
+        swarm = Swarm(llm=_mock_llm)
+        tasks = [
+            SubTask(id="a", description="task alpha", role="Researcher"),
+            SubTask(id="b", description="task beta", role="Analyst"),
+            SubTask(id="c", description="combine", role="Writer", dependencies=["a", "b"]),
+        ]
+        result = await swarm.run("parallel test", tasks=tasks)
+        assert result["metadata"]["waves"] == 2
+        assert result["metadata"]["succeeded"] == 3
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_swarm_run_empty_tasks():
-    swarm = Swarm(llm=_mock_llm)
-    result = await swarm.run("empty", tasks=[])
-    assert result["metadata"]["total_tasks"] == 0
+def test_swarm_run_empty_tasks():
+    async def _run():
+        swarm = Swarm(llm=_mock_llm)
+        result = await swarm.run("empty", tasks=[])
+        assert result["metadata"]["total_tasks"] == 0
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_swarm_run_with_context():
-    swarm = Swarm(llm=_mock_llm)
-    tasks = [SubTask(id="t1", description="use context")]
-    result = await swarm.run("goal", tasks=tasks, context="extra info")
-    assert result["metadata"]["succeeded"] == 1
+def test_swarm_run_with_context():
+    async def _run():
+        swarm = Swarm(llm=_mock_llm)
+        tasks = [SubTask(id="t1", description="use context")]
+        result = await swarm.run("goal", tasks=tasks, context="extra info")
+        assert result["metadata"]["succeeded"] == 1
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_swarm_fail_policy_skip():
-    async def failing_llm(prompt, tools=None):
-        if "fail" in prompt.lower():
-            raise RuntimeError("deliberate failure")
-        return "ok"
+def test_swarm_fail_policy_skip():
+    async def _run():
+        async def failing_llm(prompt, tools=None):
+            if "fail" in prompt.lower():
+                raise RuntimeError("deliberate failure")
+            return "ok"
 
-    swarm = Swarm(llm=failing_llm, fail_policy=FailPolicy.SKIP_ON_DEP_FAILURE)
-    tasks = [
-        SubTask(id="t1", description="this will fail"),
-        SubTask(id="t2", description="depends on fail", dependencies=["t1"]),
-    ]
-    result = await swarm.run("fail test", tasks=tasks)
-    assert result["results"]["t2"].error is not None
-    assert "Skipped" in result["results"]["t2"].error
+        swarm = Swarm(llm=failing_llm, fail_policy=FailPolicy.SKIP_ON_DEP_FAILURE)
+        tasks = [
+            SubTask(id="t1", description="this will fail"),
+            SubTask(id="t2", description="depends on fail", dependencies=["t1"]),
+        ]
+        result = await swarm.run("fail test", tasks=tasks)
+        assert result["results"]["t2"].error is not None
+        assert "Skipped" in result["results"]["t2"].error
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_swarm_duplicate_task_id_raises():
-    swarm = Swarm(llm=_mock_llm)
-    tasks = [
-        SubTask(id="dup", description="first"),
-        SubTask(id="dup", description="second"),
-    ]
-    with pytest.raises(ValueError, match="Duplicate"):
-        await swarm.run("test", tasks=tasks)
+def test_swarm_duplicate_task_id_raises():
+    async def _run():
+        swarm = Swarm(llm=_mock_llm)
+        tasks = [
+            SubTask(id="dup", description="first"),
+            SubTask(id="dup", description="second"),
+        ]
+        with pytest.raises(ValueError, match="Duplicate"):
+            await swarm.run("test", tasks=tasks)
+    asyncio.run(_run())
 
 
 # ── Attention Residuals ──
 
-@pytest.mark.asyncio
-async def test_attention_residuals_selective_context():
+def test_attention_residuals_selective_context():
     swarm = Swarm(llm=_mock_llm)
     ctx = RunContext(run_id=1, goal="test", context="")
     ctx.results["t0"] = TaskResult(0, "t0", "Researcher", "R#t0", output="Python is great for data science", wave=0)
     ctx.results["t1"] = TaskResult(1, "t1", "Analyst", "A#t1", output="Performance benchmarks show improvement", wave=0)
     task = SubTask(id="t2", description="data science analysis", dependencies=["t1"])
-    result = swarm._select_relevant_context(task, ctx)
+    result, weights = swarm._select_relevant_context(task, ctx)
     # t0 is not a dependency but may be relevant
     # result could be empty if TF-IDF scores are too low, or contain [Related Context]
     assert isinstance(result, str)
+    assert isinstance(weights, dict)
 
 
 def test_summarize_wave():
@@ -293,8 +301,9 @@ def test_summarize_wave():
 def test_weight_dep_context_single():
     swarm = Swarm()
     dep = {"t1": "only one dependency"}
-    result = swarm._weight_dep_context(SubTask(id="x", description="test"), dep)
+    result, weights = swarm._weight_dep_context(SubTask(id="x", description="test"), dep)
     assert result == dep  # Single dep returns unchanged
+    assert isinstance(weights, dict)
 
 
 def test_weight_dep_context_multiple():
@@ -305,12 +314,13 @@ def test_weight_dep_context_multiple():
         "t3": "z" * 200,
     }
     task = SubTask(id="x", description="analyze data")
-    result = swarm._weight_dep_context(task, dep)
+    result, weights = swarm._weight_dep_context(task, dep)
     assert len(result) == 3
     # At least one should be truncated (bottom half)
     truncated = [v for v in result.values() if v.endswith("...")]
     # May or may not truncate depending on TF-IDF scores
     assert isinstance(result, dict)
+    assert isinstance(weights, dict)
 
 
 # ── TaskResult ──

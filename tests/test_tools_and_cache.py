@@ -1,4 +1,5 @@
 """Tests for tools.py (security) and cache.py (LRU)."""
+import asyncio
 import os
 import json
 import pytest
@@ -273,29 +274,31 @@ def test_cache_clear():
     assert cache.hits == 0
 
 
-@pytest.mark.asyncio
-async def test_cached_llm_wrapper():
-    call_count = 0
-    async def mock_llm(prompt, tools=None):
-        nonlocal call_count
-        call_count += 1
-        return f"response-{call_count}"
+def test_cached_llm_wrapper():
+    async def _run():
+        call_count = 0
+        async def mock_llm(prompt, tools=None):
+            nonlocal call_count
+            call_count += 1
+            return f"response-{call_count}"
 
-    cache = LLMCache()
-    wrapped = cached_llm(mock_llm, cache)
-    r1 = await wrapped("hello")
-    r2 = await wrapped("hello")  # Should hit cache
-    assert r1 == r2
-    assert call_count == 1  # Only called once
+        cache = LLMCache()
+        wrapped = cached_llm(mock_llm, cache)
+        r1 = await wrapped("hello")
+        r2 = await wrapped("hello")  # Should hit cache
+        assert r1 == r2
+        assert call_count == 1  # Only called once
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_cached_llm_with_usage():
-    async def mock_llm(prompt, tools=None):
-        return ("result", {"total_tokens": 42})
+def test_cached_llm_with_usage():
+    async def _run():
+        async def mock_llm(prompt, tools=None):
+            return ("result", {"total_tokens": 42})
 
-    wrapped = cached_llm(mock_llm, LLMCache())
-    r1 = await wrapped("test")
-    assert r1 == ("result", {"total_tokens": 42})
-    r2 = await wrapped("test")  # Cache hit
-    assert r2 == ("result", {"total_tokens": 42})
+        wrapped = cached_llm(mock_llm, LLMCache())
+        r1 = await wrapped("test")
+        assert r1 == ("result", {"total_tokens": 42})
+        r2 = await wrapped("test")  # Cache hit
+        assert r2 == ("result", {"total_tokens": 42})
+    asyncio.run(_run())

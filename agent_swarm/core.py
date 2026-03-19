@@ -14,6 +14,11 @@ from .session import InMemorySessionStore
 from .skills import Skill, SkillBank, SkillState, SkillManifest
 from .ontology import OntologyRegistry, OntologyGateMode
 from .playbooks import BUILTIN_PLAYBOOKS, SOPStep
+from .attention import (
+    AttentionMap, AttentionMapBuilder, softmax_weight_context,
+    select_relevant_context_enhanced,
+    compress_block, build_wave_context, adaptive_budget,
+)
 
 logger = logging.getLogger("agent_swarm")
 
@@ -91,6 +96,9 @@ class RunContext:
     errors: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     checkpoint: Optional[Dict] = None
     wave_summaries: List[str] = field(default_factory=list)  # per-wave summaries (Attention Residuals)
+    block_summaries: List[str] = field(default_factory=list)
+    attention_builder: Optional[AttentionMapBuilder] = None
+    total_waves: int = 0
 
     def use_llm(self) -> bool:
         if self.llm_calls >= self.max_llm_calls: return False
@@ -291,7 +299,9 @@ class Swarm:
                  metrics=None, session_store=None,
                  budget_policy=None, org_chart=None, goal_ancestry=None,
                  ontology=None, ontology_gate_mode=OntologyGateMode.SOFT,
-                 genetics=None, event_bus=None):
+                 genetics=None, event_bus=None,
+                 attention_block_size=3, attention_top_k=5,
+                 attention_total_budget=0, attention_depth_factor=0.5):
         self.plan = plan or SwarmPlan(); self.llm = llm or _default_llm
         self.validator = validator or MultiValidator([Validator()])
         self.event_callback = event_callback; self.configs = {**DEFAULT_CONFIGS, **(configs or {})}
@@ -304,6 +314,10 @@ class Swarm:
         self.ontology = ontology; self.ontology_gate_mode = ontology_gate_mode
         self.genetics = genetics  # Optional SkillGenetics engine
         self.event_bus = event_bus  # Optional EventBus for live visualization
+        self.attention_block_size = attention_block_size
+        self.attention_top_k = attention_top_k
+        self.attention_total_budget = attention_total_budget
+        self.attention_depth_factor = attention_depth_factor
         self._run_id = 0; self._spent_usd = 0.0
 
     def _emit(self, ev, data=None):
@@ -475,17 +489,27 @@ class Swarm:
         ctx.save_phase(task.id, "pre_execute", {"wave": wave, "skills": len(active_skills)})
 
         # Attention Residuals: weight dependency context by relevance
+        dep_weights = {}
         if dep_ctx and len(dep_ctx) > 1:
-            dep_ctx = self._weight_dep_context(task, dep_ctx)
+            dep_ctx, dep_weights = self._weight_dep_context(
+                task, dep_ctx, wave=wave, total_waves=ctx.total_waves)
 
         # Attention Residuals: build enriched run context with wave summaries + selective context
         enriched_run_ctx = ctx.context
-        wave_ctx = "\n".join(ctx.wave_summaries) if ctx.wave_summaries else ""
+        wave_ctx = build_wave_context(
+            ctx.wave_summaries, ctx.block_summaries,
+            self.attention_block_size, wave,
+        )
         if wave_ctx:
-            enriched_run_ctx = f"[Previous Waves]\n{wave_ctx}\n{enriched_run_ctx}" if enriched_run_ctx else f"[Previous Waves]\n{wave_ctx}"
-        selective_ctx = self._select_relevant_context(task, ctx)
+            enriched_run_ctx = f"{wave_ctx}\n{enriched_run_ctx}" if enriched_run_ctx else wave_ctx
+        selective_ctx, sel_weights = self._select_relevant_context(task, ctx)
         if selective_ctx:
             enriched_run_ctx = f"{selective_ctx}\n{enriched_run_ctx}" if enriched_run_ctx else selective_ctx
+
+        # Record attention weights
+        if ctx.attention_builder is not None:
+            for src, w in {**dep_weights, **sel_weights}.items():
+                ctx.attention_builder.record(src, task.id, w, wave)
 
         truncate_level = 0  # 0=full, 1=moderate, 2=minimal
         retry_hint = ""     # Error context for self-correction
@@ -761,29 +785,16 @@ class Swarm:
 
     # ---- Attention Residuals pattern methods ----
 
-    def _select_relevant_context(self, task: SubTask, ctx: RunContext, top_k: int = 3) -> str:
+    def _select_relevant_context(self, task: SubTask, ctx: RunContext) -> Tuple[str, Dict[str, float]]:
         """Attention Residuals: selective access to all completed task outputs.
-        Picks top-k most relevant non-dependency results via TF-IDF scoring."""
-        if not ctx.results:
-            return ""
-        dep_set = set(task.dependencies)
-        candidates = {tid: r for tid, r in ctx.results.items()
-                      if r.success and tid not in dep_set and r.output}
-        if not candidates:
-            return ""
-        corpus = [r.output[:200] for r in candidates.values()]
-        self.skill_bank._tfidf.update(corpus)
-        scored = []
-        for (tid, r), doc in zip(candidates.items(), corpus):
-            score = self.skill_bank._tfidf.score(task.description, doc)
-            if score > 0.05:
-                scored.append((score, tid, r))
-        scored.sort(key=lambda x: -x[0])
-        selected = scored[:top_k]
-        if not selected:
-            return ""
-        lines = [f"  [{r.role}] {r.output[:150]}" for _, _, r in selected]
-        return "[Related Context]\n" + "\n".join(lines)
+        Picks top-k most relevant non-dependency results via softmax + RMSNorm."""
+        return select_relevant_context_enhanced(
+            task.description,
+            set(task.dependencies),
+            ctx.results,
+            self.skill_bank._tfidf,
+            top_k=self.attention_top_k,
+        )
 
     def _summarize_wave(self, wave_idx: int, results: List[TaskResult]) -> str:
         """Generate compact summary of wave results for downstream context."""
@@ -794,28 +805,20 @@ class Swarm:
             parts.append(f"  [{r.role}] {(r.output or '')[:80]}")
         return "\n".join(parts)
 
-    def _weight_dep_context(self, task: SubTask, dep_ctx: Dict[str, str]) -> Dict[str, str]:
-        """Attention Residuals: weight dependencies by relevance.
-        High-relevance deps keep full output, low-relevance get truncated."""
-        if not dep_ctx or len(dep_ctx) <= 1:
-            return dep_ctx
-        corpus = [str(v)[:200] for v in dep_ctx.values()]
-        self.skill_bank._tfidf.update(corpus)
-        scored = {}
-        for (tid, output), doc in zip(dep_ctx.items(), corpus):
-            score = self.skill_bank._tfidf.score(task.description, doc)
-            scored[tid] = (score, output)
-        if not any(s > 0 for s, _ in scored.values()):
-            return dep_ctx
-        ranked = sorted(scored.items(), key=lambda x: -x[1][0])
-        half = max(1, len(ranked) // 2)
-        weighted = {}
-        for i, (tid, (score, output)) in enumerate(ranked):
-            if i < half:
-                weighted[tid] = output
-            else:
-                weighted[tid] = output[:100] + "..." if len(output) > 100 else output
-        return weighted
+    def _weight_dep_context(self, task: SubTask, dep_ctx: Dict[str, str],
+                            wave: int = 0, total_waves: int = 0) -> Tuple[Dict[str, str], Dict[str, float]]:
+        """Attention Residuals: weight dependencies by softmax + RMSNorm.
+        Uses adaptive budget if configured."""
+        budget = adaptive_budget(
+            self.attention_total_budget,
+            wave,
+            total_waves,
+            self.attention_depth_factor,
+        ) if self.attention_total_budget > 0 else 0
+        return softmax_weight_context(
+            task.description, dep_ctx, self.skill_bank._tfidf,
+            total_budget=budget,
+        )
 
     def _aggregate(self, results):
         sr = sorted(results, key=lambda r: r.index); lines = []; errs = []
@@ -899,11 +902,21 @@ class Swarm:
             ])
 
         waves = _topological_waves(tm); all_r = []; gi = 0; t0 = time.monotonic()
+        ctx.attention_builder = AttentionMapBuilder()
+        ctx.total_waves = len(waves)
         for wn, wids in enumerate(waves):
             wr, gi = await self._exec_wave(ctx, wn, wids, tm, gi); all_r.extend(wr)
             # Wave summary caching (Attention Residuals block pattern)
             summary = self._summarize_wave(wn, wr)
             ctx.wave_summaries.append(summary)
+            # Block compression when block boundary reached
+            bs = self.attention_block_size
+            if bs > 0 and len(ctx.wave_summaries) % bs == 0:
+                block_start = len(ctx.wave_summaries) - bs
+                block_end = len(ctx.wave_summaries)
+                ctx.block_summaries.append(
+                    compress_block(ctx.wave_summaries, block_start, block_end)
+                )
             ctx.save_checkpoint(); self._emit(SwarmEvent.CHECKPOINT_SAVED, {"wave": wn})
         total_s = time.monotonic() - t0
 
@@ -973,6 +986,8 @@ class Swarm:
             "global_metrics": self.metrics.to_dict(), "next_steps": next_steps,
             "budget_spent_usd": round(self._spent_usd, 4) if self.budget_policy else 0,
             "genetics": genetics_report,
+            "attention_map": ctx.attention_builder.freeze() if ctx.attention_builder else AttentionMap(),
+            "attention_heatmap": ctx.attention_builder.freeze().ascii_heatmap() if ctx.attention_builder and ctx.attention_builder._entries else "",
             "tickets": [Ticket(ticket_id=r.task_id, title=r.task_id, priority="high" if r.wave == 0 else "medium",
                                assignee=r.role, status="done" if r.success else "failed",
                                actual_cost=round(r.duration_ms * 0.00001, 4),

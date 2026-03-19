@@ -64,3 +64,4 @@ from .result_export import save_result
 from .skill_eval import SkillEvaluator, SkillEvalReport, SkillDelta, evaluate_skill_focus
 from .context_diversity import ContextDiversityScorer, exclude_self_context, diversity_report
 from .vllm_presets import get_preset, list_presets, vllm_optimized, PRESETS
+from .attention import AttentionMap, AttentionMapBuilder, softmax, rmsnorm_score
