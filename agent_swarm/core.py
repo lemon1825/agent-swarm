@@ -90,6 +90,7 @@ class RunContext:
     tracer: Tracer = field(default_factory=Tracer)
     errors: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
     checkpoint: Optional[Dict] = None
+    wave_summaries: List[str] = field(default_factory=list)  # per-wave summaries (Attention Residuals)
 
     def use_llm(self) -> bool:
         if self.llm_calls >= self.max_llm_calls: return False
@@ -473,6 +474,19 @@ class Swarm:
 
         ctx.save_phase(task.id, "pre_execute", {"wave": wave, "skills": len(active_skills)})
 
+        # Attention Residuals: weight dependency context by relevance
+        if dep_ctx and len(dep_ctx) > 1:
+            dep_ctx = self._weight_dep_context(task, dep_ctx)
+
+        # Attention Residuals: build enriched run context with wave summaries + selective context
+        enriched_run_ctx = ctx.context
+        wave_ctx = "\n".join(ctx.wave_summaries) if ctx.wave_summaries else ""
+        if wave_ctx:
+            enriched_run_ctx = f"[Previous Waves]\n{wave_ctx}\n{enriched_run_ctx}" if enriched_run_ctx else f"[Previous Waves]\n{wave_ctx}"
+        selective_ctx = self._select_relevant_context(task, ctx)
+        if selective_ctx:
+            enriched_run_ctx = f"{selective_ctx}\n{enriched_run_ctx}" if enriched_run_ctx else selective_ctx
+
         truncate_level = 0  # 0=full, 1=moderate, 2=minimal
         retry_hint = ""     # Error context for self-correction
         task_tokens = 0     # Accumulated token usage for this task
@@ -489,7 +503,7 @@ class Swarm:
             if not ctx.use_llm(): last_err = f"LLM budget({ctx.max_llm_calls})"; break
             try:
                 output, usage = await asyncio.wait_for(
-                    agent.execute(task, dep_ctx, ctx.context, skill_ctx, handoff_ctx, goal_ctx,
+                    agent.execute(task, dep_ctx, enriched_run_ctx, skill_ctx, handoff_ctx, goal_ctx,
                                   retry_hint=retry_hint, truncate_level=truncate_level),
                     timeout=rem
                 )
@@ -745,6 +759,64 @@ class Swarm:
                 dc[d] = f"[UNAVAILABLE:{d}]"
         return dc
 
+    # ---- Attention Residuals pattern methods ----
+
+    def _select_relevant_context(self, task: SubTask, ctx: RunContext, top_k: int = 3) -> str:
+        """Attention Residuals: selective access to all completed task outputs.
+        Picks top-k most relevant non-dependency results via TF-IDF scoring."""
+        if not ctx.results:
+            return ""
+        dep_set = set(task.dependencies)
+        candidates = {tid: r for tid, r in ctx.results.items()
+                      if r.success and tid not in dep_set and r.output}
+        if not candidates:
+            return ""
+        corpus = [r.output[:200] for r in candidates.values()]
+        self.skill_bank._tfidf.update(corpus)
+        scored = []
+        for (tid, r), doc in zip(candidates.items(), corpus):
+            score = self.skill_bank._tfidf.score(task.description, doc)
+            if score > 0.05:
+                scored.append((score, tid, r))
+        scored.sort(key=lambda x: -x[0])
+        selected = scored[:top_k]
+        if not selected:
+            return ""
+        lines = [f"  [{r.role}] {r.output[:150]}" for _, _, r in selected]
+        return "[Related Context]\n" + "\n".join(lines)
+
+    def _summarize_wave(self, wave_idx: int, results: List[TaskResult]) -> str:
+        """Generate compact summary of wave results for downstream context."""
+        succeeded = [r for r in results if r.success]
+        failed = [r for r in results if not r.success]
+        parts = [f"Wave {wave_idx}: {len(succeeded)} ok, {len(failed)} failed"]
+        for r in succeeded[:4]:
+            parts.append(f"  [{r.role}] {(r.output or '')[:80]}")
+        return "\n".join(parts)
+
+    def _weight_dep_context(self, task: SubTask, dep_ctx: Dict[str, str]) -> Dict[str, str]:
+        """Attention Residuals: weight dependencies by relevance.
+        High-relevance deps keep full output, low-relevance get truncated."""
+        if not dep_ctx or len(dep_ctx) <= 1:
+            return dep_ctx
+        corpus = [str(v)[:200] for v in dep_ctx.values()]
+        self.skill_bank._tfidf.update(corpus)
+        scored = {}
+        for (tid, output), doc in zip(dep_ctx.items(), corpus):
+            score = self.skill_bank._tfidf.score(task.description, doc)
+            scored[tid] = (score, output)
+        if not any(s > 0 for s, _ in scored.values()):
+            return dep_ctx
+        ranked = sorted(scored.items(), key=lambda x: -x[1][0])
+        half = max(1, len(ranked) // 2)
+        weighted = {}
+        for i, (tid, (score, output)) in enumerate(ranked):
+            if i < half:
+                weighted[tid] = output
+            else:
+                weighted[tid] = output[:100] + "..." if len(output) > 100 else output
+        return weighted
+
     def _aggregate(self, results):
         sr = sorted(results, key=lambda r: r.index); lines = []; errs = []
         for r in sr:
@@ -829,6 +901,9 @@ class Swarm:
         waves = _topological_waves(tm); all_r = []; gi = 0; t0 = time.monotonic()
         for wn, wids in enumerate(waves):
             wr, gi = await self._exec_wave(ctx, wn, wids, tm, gi); all_r.extend(wr)
+            # Wave summary caching (Attention Residuals block pattern)
+            summary = self._summarize_wave(wn, wr)
+            ctx.wave_summaries.append(summary)
             ctx.save_checkpoint(); self._emit(SwarmEvent.CHECKPOINT_SAVED, {"wave": wn})
         total_s = time.monotonic() - t0
 
