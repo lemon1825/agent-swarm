@@ -3,8 +3,8 @@
   <img src="https://img.shields.io/badge/size-%3C1MB-blue?style=flat-square" alt="Size">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/badge/tests-121%20passed-success?style=flat-square" alt="Tests">
-  <img src="https://img.shields.io/badge/LOC-9.1K-informational?style=flat-square" alt="Lines of Code">
+  <img src="https://img.shields.io/badge/tests-491%20passed-success?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/LOC-11.1K-informational?style=flat-square" alt="Lines of Code">
 </p>
 
 <h1 align="center">Agent Swarm</h1>
@@ -12,7 +12,7 @@
 <p align="center">
   <strong>The embeddable agent engine that learns.</strong><br>
   Zero-dependency AI agent orchestration with parallel DAG execution,<br>
-  skill genetics, ontology routing, and human approval gates.
+  skill genetics, ontology routing, multi-stage review, and safety guards.
 </p>
 
 <p align="center">
@@ -52,6 +52,8 @@ Agent Swarm is built for workflows where:
 - You need **budget caps** so LLM costs don't spiral
 - Outputs must pass **schema validation** before delivery
 - The engine **learns from every run** and gets better over time
+- A **multi-stage review pipeline** catches issues before shipping
+- **Safety guards** block destructive operations automatically
 
 ### Real use cases
 
@@ -59,9 +61,10 @@ Agent Swarm is built for workflows where:
 |---|---|
 | **Competitor analysis** | 3 agents research in parallel -> analyst compares -> writer produces report -> reviewer approves |
 | **Code review pipeline** | Scanner finds issues -> reviewer prioritizes -> writer produces fix suggestions -> lead approves |
+| **Ship pipeline** | Test -> multi-role review -> version bump -> changelog -> commit -> push with checkpoints |
 | **Product discovery** | Researcher explores market -> analyst identifies opportunities -> strategist writes brief -> PM approves |
-| **Content production** | Researcher gathers sources -> writer drafts -> editor reviews -> publisher approves final version |
-| **Compliance review** | Analyst checks policy -> reviewer verifies -> approver signs off -> report generated |
+| **QA health check** | Scan codebase -> classify issues -> compute health score -> generate report with recommendations |
+| **Retrospective** | Collect telemetry -> analyze patterns -> extract lessons -> generate action items |
 
 ---
 
@@ -77,10 +80,12 @@ Agent Swarm is built for workflows where:
 |---|:---:|:---:|
 | **Dependencies** | **0** | 10+ |
 | **Install size** | **< 1 MB** | 200-500 MB |
-| **Lines of code** | **9.1K** | 30-50K+ |
+| **Lines of code** | **11.1K** | 30-50K+ |
 | **Skill evolution** | **Yes** | No |
 | **Ontology routing** | **Yes** | No |
 | **Budget control** | **Built-in** | Manual |
+| **Review pipeline** | **Multi-stage** | Single gate |
+| **Safety guards** | **Built-in** | Manual |
 | **Embed in product** | **Copy folder** | Full stack |
 
 </td>
@@ -204,6 +209,35 @@ print(f"Verdict: {report['verdict']}")       # "effective" / "emerging"
 print(f"Fitness delta: {report['fitness']['delta']:+.3f}")
 ```
 
+### 6. Multi-stage review pipeline
+
+```python
+from agent_swarm import ReviewPipeline, ReviewStage, ReviewRole
+
+pipeline = ReviewPipeline(
+    stages=[
+        ReviewStage(name="spec", gates=[ReviewRole.SPEC_COMPLIANCE], pass_threshold=0.8),
+        ReviewStage(name="security", gates=[ReviewRole.SECURITY], pass_threshold=0.9),
+        ReviewStage(name="quality", gates=[ReviewRole.CODE_QUALITY, ReviewRole.DESIGN]),
+    ],
+    reviewers={...},  # map ReviewRole -> async reviewer function
+)
+result = await pipeline.run(run_id, proof)
+print(f"Passed: {result.passed}, Score: {result.overall_score:.1%}")
+```
+
+### 7. Safety guards
+
+```python
+from agent_swarm import Swarm, CarefulGuard, FreezeGuard, GuardChain
+
+guards = GuardChain([
+    CarefulGuard(),                         # blocks rm -rf, DROP TABLE, force-push, etc.
+    FreezeGuard(frozen_paths=["/production"]),  # locks critical directories
+])
+swarm = Swarm(llm=llm, safety_guards=guards)
+```
+
 ---
 
 ## Features
@@ -221,6 +255,9 @@ Any task can require approval. Rejected work stops cleanly. Full audit trail.
 ### Budget Control
 Set `max_cost_per_run`. The engine tracks real token usage and blocks when exceeded.
 
+### Multi-Stage Review Pipeline
+Chain review stages with different roles (spec, security, quality, design, CEO). Conditional skip, auto-retry, human escalation.
+
 </td>
 <td width="33%">
 
@@ -233,14 +270,20 @@ SKOS-style vocabulary controls agent capabilities. 3 modes: SOFT (log), WARN (co
 ### Schema Validation
 Nested JSON schemas, `$ref` composition, cross-field rules, 5 domain presets, structured error objects.
 
+### Context Isolation
+Policy-based context filtering limits what each agent sees. Wave history, selective items, character budgets, role filters.
+
 </td>
 <td width="33%">
 
-### Security Hardened
-SSRF protection, command blocklist, path traversal prevention, HMAC webhook auth, prompt injection defense.
+### Safety Guards
+`CarefulGuard` detects destructive commands (rm -rf, DROP TABLE, force-push). `FreezeGuard` locks directories. Composable via `GuardChain`.
 
-### 7 Built-in Playbooks
-`research`, `code_review`, `discover`, `strategy`, `write_prd`, `plan_launch`, `north_star`
+### QA Health Scoring
+Issue taxonomy (CRITICAL→INFO), weighted health score (100 - deductions), grade system (A-F), QA review gate integration.
+
+### 14 Built-in Playbooks
+`research`, `code_review`, `discover`, `strategy`, `write_prd`, `plan_launch`, `north_star`, `brainstorm_spec`, `ship`, `qa`, `retro` + 3 swarm cycle playbooks.
 
 ### MCP + CLI
 Connect to Claude Desktop, Cursor, or any MCP client. Full CLI for quick runs.
@@ -248,6 +291,28 @@ Connect to Claude Desktop, Cursor, or any MCP client. Full CLI for quick runs.
 </td>
 </tr>
 </table>
+
+---
+
+## New in v1.1.0
+
+Eight new modules inspired by [Superpowers](https://github.com/obra/superpowers) and [gstack](https://github.com/garrytan/gstack):
+
+| Module | What it does |
+|---|---|
+| **ReviewPipeline** | Multi-stage review with conditional skip, auto-retry, and human escalation |
+| **ContextFilter** | Policy-based context isolation (wave history, character budgets, role filters) |
+| **SpecGate** | HARD-GATE: validate specs before implementation begins |
+| **Safety Guards** | Destructive command detection + directory freeze locks |
+| **QA System** | Issue taxonomy, health scoring (0-100), QA review gate |
+| **Telemetry** | Thread-safe JSONL event logging with aggregation |
+| **Retro** | Retrospective reports from telemetry (success rate, failure patterns, suggestions) |
+| **Ship Pipeline** | Checkpoint-based test→review→version→changelog→commit→push |
+| **Templates** | Structured output rendering (QA Report, Design Review, Retro Report, TODO List) |
+| **SkillChain** | Sequential skill chaining from playbooks |
+| **SkillSuggestor** | Proactive skill/playbook recommendations from goal text |
+
+Plus **8 new skills** (brainstorm, review, qa, ship, retro, investigate, safety, deploy) bringing the total from 4 to **12 skills**.
 
 ---
 
@@ -328,32 +393,47 @@ python -m agent_swarm.mcp_server --setup  # Show setup guide
                     |            (core.py)                 |
                     +--+--------+--------+--------+-------+
                        |        |        |        |
-              +--------+   +---+---+  +-+------+ +--------+
-              | Skills |   |Ontology|  |Genetics| |Run     |
-              | Bank   |   |Registry|  |Engine  | |Machine |
-              +--------+   +-------+  +--------+ +--------+
+              +--------+  +----+---+  +-+------+ +--------+
+              | Skills |  |Ontology|  |Genetics| |Run     |
+              | Bank   |  |Registry|  |Engine  | |Machine |
+              +--------+  +--------+  +--------+ +--------+
+                       |        |        |        |
+              +--------+  +----+---+  +-+------+ +--------+
+              |Review  |  |Context |  |Safety  | |Ship    |
+              |Pipeline|  |Filter  |  |Guards  | |Pipeline|
+              +--------+  +--------+  +--------+ +--------+
                        |        |        |        |
                     +--+--------+--------+--------+-------+
                     |        Infrastructure Layer          |
-                    | Cache | Memory | Tracing | Durable   |
+                    | Cache | Memory | Telemetry | Durable |
+                    | QA    | Retro  | Templates | Tracing |
                     +-------------------------------------+
 ```
 
 <details>
-<summary><strong>Full module breakdown (35 modules, 9.1K LOC)</strong></summary>
+<summary><strong>Full module breakdown (44 modules, 11.1K LOC)</strong></summary>
 
 | Module | Lines | Purpose |
 |---|---:|---|
-| `core.py` | 1,163 | Swarm engine, DAG executor, Attention Residuals |
-| `run_machine.py` | 525 | State machine runner, proof bundles |
+| `core.py` | 1,179 | Swarm engine, DAG executor, Attention Residuals |
+| `run_machine.py` | 650 | State machine runner, proof bundles, SpecGate |
 | `mcp_server.py` | 439 | MCP protocol server (zero deps) |
 | `ontology.py` | 416 | SKOS registry, 3-mode gate |
-| `skills.py` | 371 | SkillBank, 6-gate promotion |
+| `skills.py` | 500 | SkillBank, 6-gate promotion, SkillChain, SkillSuggestor |
 | `tools.py` | 360 | 6 built-in tools, security hardened |
 | `genetics.py` | 330 | Crossover, adversarial, tournament |
 | `tracing.py` | 296 | Distributed execution tracing |
 | `tracker.py` | 295 | Webhook triggers, HMAC auth |
 | `validation.py` | 217 | Schema, `$ref`, cross-field rules |
+| `review.py` | 170 | Multi-stage review pipeline |
+| `ship.py` | 190 | Ship pipeline with checkpoints |
+| `safety.py` | 180 | Destructive command guards, directory freeze |
+| `qa.py` | 200 | Issue taxonomy, health scoring |
+| `context_filter.py` | 150 | Policy-based context isolation |
+| `retro.py` | 150 | Retrospective from telemetry |
+| `templates.py` | 120 | Structured output templates |
+| `telemetry.py` | 120 | JSONL event logging |
+| `playbooks.py` | 200 | 14 SOP playbooks |
 | `...` | | 25 more modules |
 
 </details>
@@ -363,8 +443,27 @@ python -m agent_swarm.mcp_server --setup  # Show setup guide
 ## Testing
 
 ```bash
-pytest tests/ -q          # 121 tests (4 known failures in run_machine)
+pytest tests/ -q          # 491 tests, 0 failures
 ```
+
+---
+
+## 12 Built-in Skills
+
+| Skill | Purpose |
+|---|---|
+| `scout` | Reconnaissance — define mission, decompose tasks |
+| `guard` | Quality protection — tests, policy compliance |
+| `evolve` | Continuous improvement — fixes, lessons, next cycle |
+| `swarm-cycle` | Full Scout → Build → Guard → Evolve workflow |
+| `brainstorm` | Multi-perspective idea exploration |
+| `review` | Multi-role code/spec review with scoring |
+| `qa` | Issue taxonomy + health score QA |
+| `ship` | Test → review → version → commit → push |
+| `retro` | Weekly retrospective with stats + lessons |
+| `investigate` | Root cause analysis + evidence chain |
+| `safety` | Destructive command warnings + directory locks |
+| `deploy` | Deployment verification + rollback plan |
 
 ---
 

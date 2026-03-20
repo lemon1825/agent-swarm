@@ -116,3 +116,57 @@ SWARM_PLAYBOOKS = {
 }
 
 BUILTIN_PLAYBOOKS.update(SWARM_PLAYBOOKS)
+
+# ── Additional Playbooks ────────────────────────────────
+
+PLAYBOOK_BRAINSTORM_SPEC = SOPPlaybook(
+    name="brainstorm_spec",
+    description="Multi-perspective brainstorming to specification",
+    steps=[
+        SOPStep(name="Diverge", role="Creative Lead", description="Generate diverse ideas from multiple perspectives", expected_output="idea_list"),
+        SOPStep(name="Evaluate", role="Critic", description="Evaluate ideas against feasibility and impact", depends_on=["Diverge"], expected_output="evaluation_matrix"),
+        SOPStep(name="Synthesize", role="Architect", description="Synthesize top ideas into specification", depends_on=["Evaluate"], expected_output="specification_draft"),
+        SOPStep(name="Review", role="Reviewer", description="Review specification for completeness", depends_on=["Synthesize"], expected_output="final_specification", requires_approval=True),
+    ],
+)
+
+PLAYBOOK_SHIP = SOPPlaybook(
+    name="ship",
+    description="Ship pipeline: test, review, version, commit, push",
+    steps=[
+        SOPStep(name="Test", role="QA Engineer", description="Run all tests and verify passing", expected_output="test_results"),
+        SOPStep(name="Review", role="Reviewer", description="Code review gate", depends_on=["Test"], expected_output="review_result"),
+        SOPStep(name="Version", role="Release Manager", description="Bump version number", depends_on=["Review"], expected_output="version_bump"),
+        SOPStep(name="Commit", role="Developer", description="Create commit with changelog", depends_on=["Version"], expected_output="commit_hash"),
+        SOPStep(name="Push", role="Release Manager", description="Push to remote", depends_on=["Commit"], expected_output="push_result", requires_approval=True),
+    ],
+)
+
+PLAYBOOK_QA = SOPPlaybook(
+    name="qa",
+    description="QA analysis with issue taxonomy and health scoring",
+    steps=[
+        SOPStep(name="Scan", role="QA Analyst", description="Scan codebase for issues", expected_output="raw_issues"),
+        SOPStep(name="Classify", role="QA Lead", description="Classify issues by severity and category", depends_on=["Scan"], expected_output="classified_issues"),
+        SOPStep(name="Score", role="QA Lead", description="Calculate health score", depends_on=["Classify"], expected_output="health_score"),
+        SOPStep(name="Report", role="QA Lead", description="Generate QA report with recommendations", depends_on=["Score"], expected_output="qa_report"),
+    ],
+)
+
+PLAYBOOK_RETRO = SOPPlaybook(
+    name="retro",
+    description="Retrospective analysis with lessons learned",
+    steps=[
+        SOPStep(name="Collect", role="Analyst", description="Collect metrics and telemetry data", expected_output="raw_metrics"),
+        SOPStep(name="Analyze", role="Analyst", description="Analyze patterns and trends", depends_on=["Collect"], expected_output="pattern_analysis"),
+        SOPStep(name="Suggest", role="Coach", description="Generate improvement suggestions", depends_on=["Analyze"], expected_output="suggestions"),
+        SOPStep(name="Document", role="Writer", description="Document lessons and action items", depends_on=["Suggest"], expected_output="retro_report"),
+    ],
+)
+
+BUILTIN_PLAYBOOKS.update({
+    "brainstorm_spec": PLAYBOOK_BRAINSTORM_SPEC,
+    "ship": PLAYBOOK_SHIP,
+    "qa": PLAYBOOK_QA,
+    "retro": PLAYBOOK_RETRO,
+})

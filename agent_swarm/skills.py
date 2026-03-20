@@ -4,7 +4,7 @@ import json, logging, math, os, re, tempfile, time
 from collections import defaultdict, Counter
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .semantic_router import SemanticRouter
 
@@ -92,6 +92,38 @@ class Skill:
         d2["class_failed"] = defaultdict(int, d2.get("class_failed", {}))
         return cls(**{k: d2[k] for k in d2 if k in cls.__dataclass_fields__})
 
+@dataclass
+class SkillChain:
+    """Sequential skill chaining — executes skills in order, passing output forward."""
+    skills: List[str] = field(default_factory=list)  # skill names in order
+    name: str = ""
+    description: str = ""
+
+    def __post_init__(self):
+        if not self.name and self.skills:
+            self.name = " → ".join(self.skills)
+
+    @staticmethod
+    def from_playbook(playbook_name: str, playbooks: Dict[str, Any]) -> "SkillChain":
+        """Create a chain from a playbook's step names."""
+        pb = playbooks.get(playbook_name)
+        if not pb:
+            return SkillChain(name=playbook_name)
+        steps = [s.name.lower() for s in pb.steps]
+        return SkillChain(skills=steps, name=pb.name, description=pb.description)
+
+    def validate(self, available_skills: List[str]) -> List[str]:
+        """Return list of missing skills not available."""
+        available = set(s.lower() for s in available_skills)
+        return [s for s in self.skills if s.lower() not in available]
+
+    def __len__(self) -> int:
+        return len(self.skills)
+
+    def __iter__(self):
+        return iter(self.skills)
+
+
 PERSISTENCE_VERSION = 12
 
 class _TFIDFIndex:
@@ -147,14 +179,44 @@ class FailureCluster:
     @staticmethod
     def _norm(e): s = e.lower()[:80]; s = re.sub(r'\d+', 'N', s); s = re.sub(r'/[^\s]+', '/P', s); return re.sub(r'\s+', ' ', s).strip()
 
+@dataclass
+class SkillPreamble:
+    """Standardized preamble attached to skill context."""
+    session_id: str = ""
+    run_id: str = ""
+    config: Dict[str, Any] = field(default_factory=dict)
+    analytics_hooks: List[Callable] = field(default_factory=list)
+
+    def format_preamble(self) -> str:
+        """Format preamble for prompt injection."""
+        parts = []
+        if self.session_id:
+            parts.append(f"[Session: {self.session_id}]")
+        if self.run_id:
+            parts.append(f"[Run: {self.run_id}]")
+        if self.config:
+            config_str = ", ".join(f"{k}={v}" for k, v in self.config.items())
+            parts.append(f"[Config: {config_str}]")
+        return " ".join(parts) if parts else ""
+
+    def notify_hooks(self, event: str, data: Optional[Dict] = None) -> None:
+        """Notify all analytics hooks."""
+        for hook in self.analytics_hooks:
+            try:
+                hook(event, data or {})
+            except Exception:
+                pass
+
+
 class SkillBank:
-    def __init__(self, max_general=30, max_per_cat=15, decay_threshold=5, min_usefulness=0.2):
+    def __init__(self, max_general=30, max_per_cat=15, decay_threshold=5, min_usefulness=0.2, preamble: Optional[SkillPreamble] = None):
         self.general: List[Skill] = []; self.specific: Dict[str, List[Skill]] = defaultdict(list)
         self._mg = max_general; self._mc = max_per_cat; self._decay = decay_threshold; self._mu = min_usefulness
         self._tfidf = _TFIDFIndex(); self._fc = FailureCluster()
         self._semantic = SemanticRouter()  # auto-fallback if sentence-transformers not installed
         self._run_success_rates: List[float] = []
         self._shadow_runs: Dict[str, List[Dict]] = {}  # shadow replay data
+        self._preamble = preamble
 
     def retrieve(self, desc, role="", top_k=8, min_score=0.05, onto_term_id=""):
         if not desc or not desc.strip(): return []
@@ -186,11 +248,17 @@ class SkillBank:
 
     def format_for_prompt(self, skills, role=""):
         if not skills: return ""
+        parts = []
+        if self._preamble:
+            preamble_str = self._preamble.format_preamble()
+            if preamble_str:
+                parts.append(preamble_str)
         lines = []
         for s in skills:
             prompt = s.get_prompt_for_role(role) if role else s.to_prompt_str()
             lines.append(f"  - {prompt}")
-        return "[Available Skills]\n" + "\n".join(lines)
+        parts.append("[Available Skills]\n" + "\n".join(lines))
+        return "\n".join(parts)
 
     def add(self, skill):
         existing = self._find_dup(skill)
@@ -369,3 +437,74 @@ class SkillBank:
     def total_count(self): return len(self._all())
     @staticmethod
     def _tok(t): return {w.lower() for w in t.split() if len(w) > 2}
+
+
+@dataclass
+class SkillSuggestion:
+    """A suggested skill or playbook for a given goal."""
+    name: str
+    suggestion_type: str  # "skill" or "playbook"
+    reason: str
+    confidence: float = 0.0  # 0.0 to 1.0
+
+
+class SkillSuggestor:
+    """Proactively suggests skills and playbooks based on goal text analysis."""
+
+    PLAYBOOK_KEYWORDS = {
+        "research": ["research", "investigate", "study", "analyze", "explore"],
+        "code_review": ["review", "audit", "inspect", "check code", "code quality"],
+        "brainstorm_spec": ["brainstorm", "ideate", "design", "spec", "specification"],
+        "ship": ["ship", "release", "deploy", "publish", "push"],
+        "qa": ["test", "qa", "quality", "bug", "issue", "health"],
+        "retro": ["retro", "retrospective", "review period", "lessons", "what went"],
+        "discover": ["discover", "opportunity", "assumption", "experiment"],
+        "strategy": ["strategy", "vision", "roadmap", "positioning"],
+        "write_prd": ["prd", "product requirement", "product spec", "feature spec"],
+        "swarm_feature": ["feature", "implement", "build", "create", "add"],
+        "swarm_bugfix": ["bug", "fix", "broken", "error", "crash", "debug"],
+        "swarm_research": ["research question", "synthesize", "literature"],
+    }
+
+    def __init__(self, skill_bank: Optional[Any] = None, playbooks: Optional[Dict[str, Any]] = None):
+        self._skill_bank = skill_bank
+        self._playbooks = playbooks or {}
+
+    def suggest(self, goal_text: str, top_k: int = 3) -> List[SkillSuggestion]:
+        """Analyze goal text and suggest relevant skills/playbooks."""
+        suggestions: List[SkillSuggestion] = []
+        goal_lower = goal_text.lower()
+
+        # 1. Match playbooks by keywords
+        for pb_name, keywords in self.PLAYBOOK_KEYWORDS.items():
+            if pb_name not in self._playbooks:
+                continue
+            matches = sum(1 for kw in keywords if kw in goal_lower)
+            if matches > 0:
+                confidence = min(1.0, matches / len(keywords) + 0.2)
+                pb = self._playbooks[pb_name]
+                desc = getattr(pb, 'description', pb_name)
+                suggestions.append(SkillSuggestion(
+                    name=pb_name,
+                    suggestion_type="playbook",
+                    reason=f"Matches keywords for '{desc}'",
+                    confidence=confidence,
+                ))
+
+        # 2. Match skills from skill bank
+        if self._skill_bank:
+            try:
+                skills = self._skill_bank.retrieve(goal_text, top_k=top_k)
+                for skill, score in skills if isinstance(skills, list) and skills and isinstance(skills[0], tuple) else []:
+                    suggestions.append(SkillSuggestion(
+                        name=skill.name if hasattr(skill, 'name') else str(skill),
+                        suggestion_type="skill",
+                        reason=f"TF-IDF match (score: {score:.2f})",
+                        confidence=min(1.0, score),
+                    ))
+            except Exception:
+                pass
+
+        # Sort by confidence, take top_k
+        suggestions.sort(key=lambda s: s.confidence, reverse=True)
+        return suggestions[:top_k]

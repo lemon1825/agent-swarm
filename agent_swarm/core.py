@@ -19,6 +19,14 @@ from .attention import (
     select_relevant_context_enhanced,
     compress_block, build_wave_context, adaptive_budget,
 )
+try:
+    from .safety import GuardAction
+except ImportError:
+    GuardAction = None
+try:
+    from .context_filter import ContextFilter, ContextPolicy
+except ImportError:  # pragma: no cover
+    ContextFilter = None
 
 logger = logging.getLogger("agent_swarm")
 
@@ -301,7 +309,8 @@ class Swarm:
                  ontology=None, ontology_gate_mode=OntologyGateMode.SOFT,
                  genetics=None, event_bus=None,
                  attention_block_size=3, attention_top_k=5,
-                 attention_total_budget=0, attention_depth_factor=0.5):
+                 attention_total_budget=0, attention_depth_factor=0.5,
+                 safety_guards=None, telemetry=None):
         self.plan = plan or SwarmPlan(); self.llm = llm or _default_llm
         self.validator = validator or MultiValidator([Validator()])
         self.event_callback = event_callback; self.configs = {**DEFAULT_CONFIGS, **(configs or {})}
@@ -318,6 +327,8 @@ class Swarm:
         self.attention_top_k = attention_top_k
         self.attention_total_budget = attention_total_budget
         self.attention_depth_factor = attention_depth_factor
+        self._safety_guards = safety_guards
+        self._telemetry = telemetry
         self._run_id = 0; self._spent_usd = 0.0
 
     def _emit(self, ev, data=None):
@@ -506,10 +517,32 @@ class Swarm:
         if selective_ctx:
             enriched_run_ctx = f"{selective_ctx}\n{enriched_run_ctx}" if enriched_run_ctx else selective_ctx
 
+        # Context isolation filter
+        if (ContextFilter is not None
+                and hasattr(task, 'metadata') and task.metadata
+                and task.metadata.get("context_policy")):
+            filter_ctx = {
+                "wave_history": ctx.wave_summaries,
+                "selective_context": selective_ctx if selective_ctx else "",
+                "dep_context": dep_ctx,
+                "run_context": enriched_run_ctx or "",
+            }
+            filtered = ContextFilter.filter(task, filter_ctx)
+            enriched_run_ctx = filtered.get("run_context", enriched_run_ctx)
+
         # Record attention weights
         if ctx.attention_builder is not None:
             for src, w in {**dep_weights, **sel_weights}.items():
                 ctx.attention_builder.record(src, task.id, w, wave)
+
+        # Safety guards check
+        if self._safety_guards and GuardAction is not None:
+            check_content = f"{task.description} {getattr(task, 'instructions', '')}"
+            guard_result = self._safety_guards.check(check_content)
+            if guard_result.action == GuardAction.BLOCK:
+                task.status = TaskStatus.FAILED
+                return TaskResult(idx, task.id, agent.role, agent.name, output="",
+                                  error=f"Blocked by safety guard: {guard_result.reason}", wave=wave)
 
         truncate_level = 0  # 0=full, 1=moderate, 2=minimal
         retry_hint = ""     # Error context for self-correction
@@ -605,6 +638,8 @@ class Swarm:
             ctx.save_phase(task.id, "validated", {"output_preview": (output or "")[:100]})
             task.status = TaskStatus.COMPLETED; ctx.tracer.end("ok")
             r = TaskResult(idx, task.id, agent.role, agent.name, output=output, duration_ms=dur, attempts=att + 1, wave=wave, tokens_used=task_tokens)
+            if self._telemetry:
+                self._telemetry.emit("task_completed", {"task_id": task.id, "wave": wave})
             self._on_success(ctx, task, output, att + 1, dur, active_skills, shadow_skills, task_class); self.metrics.record_task_duration(dur); return r
 
         dur = (time.monotonic() - start) * 1000; task.status = TaskStatus.FAILED; ctx.tracer.end("error", last_err or "")

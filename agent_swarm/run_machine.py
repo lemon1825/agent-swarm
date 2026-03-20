@@ -32,7 +32,7 @@ Usage:
     print(proof.summary())
 """
 
-__all__ = ['RunState', 'TRANSITIONS', 'StateTransition', 'ProofBundle', 'RunConfig', 'Run', 'RunMachine', 'ReviewGate', 'ReviewResult']
+__all__ = ['RunState', 'TRANSITIONS', 'StateTransition', 'ProofBundle', 'RunConfig', 'Run', 'RunMachine', 'ReviewGate', 'ReviewResult', 'SpecGate']
 import asyncio
 import json
 import logging
@@ -43,12 +43,18 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+try:
+    from .review import ReviewPipeline as _ReviewPipeline
+except Exception:  # pragma: no cover
+    _ReviewPipeline = None
+
 logger = logging.getLogger("agent_swarm")
 
 
 class RunState(str, Enum):
     QUEUED = "queued"
     PLANNING = "planning"
+    SPEC_REVIEW = "spec_review"
     IMPLEMENTING = "implementing"
     TESTING = "testing"
     AWAITING_APPROVAL = "awaiting_approval"
@@ -85,10 +91,19 @@ class ReviewGate:
     order: int = 0                     # execution order
 
 
+@dataclass
+class SpecGate:
+    """Gate that validates spec/plan before implementation begins."""
+    validator: Callable  # async (run_id: str, plan: Any) -> (bool, str)
+    require_human_approval: bool = False
+    auto_approve_threshold: float = 0.8
+
+
 # Valid state transitions
 TRANSITIONS = {
     RunState.QUEUED: [RunState.PLANNING, RunState.CANCELLED],
-    RunState.PLANNING: [RunState.IMPLEMENTING, RunState.FAILED],
+    RunState.PLANNING: [RunState.SPEC_REVIEW, RunState.IMPLEMENTING, RunState.FAILED],
+    RunState.SPEC_REVIEW: [RunState.IMPLEMENTING, RunState.AWAITING_APPROVAL, RunState.FAILED],
     RunState.IMPLEMENTING: [RunState.TESTING, RunState.FAILED],
     RunState.TESTING: [RunState.REVIEWING, RunState.AWAITING_APPROVAL, RunState.COMPLETED, RunState.FAILED],
     RunState.REVIEWING: [RunState.COMPLETED, RunState.AWAITING_APPROVAL, RunState.FAILED],
@@ -361,12 +376,16 @@ class RunMachine:
     This is the core of the "operational job system" model.
     """
 
-    def __init__(self, persist_dir: str = None, review_gates: List[ReviewGate] = None):
+    def __init__(self, persist_dir: str = None, review_gates: List[ReviewGate] = None,
+                 review_pipeline: Optional['_ReviewPipeline'] = None,
+                 spec_gate: Optional[SpecGate] = None):
         self._runs: Dict[str, Run] = {}
         self._queue: List[str] = []  # Run IDs in priority order
         self._persist_dir = persist_dir
         self._on_state_change: List[Callable] = []
         self._review_gates = sorted(review_gates or [], key=lambda g: g.order)
+        self._review_pipeline = review_pipeline
+        self._spec_gate = spec_gate
         if persist_dir:
             os.makedirs(persist_dir, exist_ok=True)
             self._load()
@@ -417,6 +436,27 @@ class RunMachine:
             try:
                 # PLANNING
                 self._transition(run, RunState.PLANNING, "Starting execution")
+
+                # SPEC GATE — validate plan before implementation
+                if self._spec_gate:
+                    self._transition(run, RunState.SPEC_REVIEW, "Validating spec/plan")
+                    plan_data = {"goal": run.config.goal, "tasks": run.config.tasks,
+                                 "context": run.config.context}
+                    passed, feedback = await self._spec_gate.validator(run.id, plan_data)
+                    if not passed:
+                        if self._spec_gate.require_human_approval:
+                            self._transition(run, RunState.AWAITING_APPROVAL,
+                                             f"Spec review failed, needs human approval: {feedback}")
+                            run.proof.approval_status = "pending"
+                            run.proof.completed_at = time.time()
+                            self._persist_run(run)
+                            return run.proof
+                        else:
+                            self._transition(run, RunState.FAILED,
+                                             f"Spec review failed: {feedback}")
+                            run.proof.completed_at = time.time()
+                            self._persist_run(run)
+                            return run.proof
 
                 # IMPLEMENTING
                 self._transition(run, RunState.IMPLEMENTING, "Plan ready, executing tasks")
@@ -469,6 +509,27 @@ class RunMachine:
                             else:
                                 run.proof.approval_status = "rejected"
                                 self._transition(run, RunState.REJECTED, "Rejected after review failure")
+                        run.proof.completed_at = time.time()
+                        self._persist_run(run)
+                        return run.proof
+
+                # Multi-stage review pipeline (if configured)
+                if self._review_pipeline and _ReviewPipeline:
+                    if run.state != RunState.REVIEWING:
+                        self._transition(run, RunState.REVIEWING, "entering review pipeline")
+                    pipeline_result = await self._review_pipeline.run(
+                        run.id, run.proof, run.config.metadata
+                    )
+                    run.proof.review_results.append({
+                        "pipeline": True,
+                        "passed": pipeline_result.passed,
+                        "score": pipeline_result.overall_score,
+                        "stages_completed": pipeline_result.stages_completed,
+                        "stages_total": pipeline_result.stages_total,
+                        "escalated": pipeline_result.escalated,
+                    })
+                    if not pipeline_result.passed:
+                        self._transition(run, RunState.FAILED, "Review pipeline failed")
                         run.proof.completed_at = time.time()
                         self._persist_run(run)
                         return run.proof

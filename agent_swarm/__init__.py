@@ -27,8 +27,10 @@ from .metrics import MetricsCollector, Tracer, Span
 from .session import SessionStore, InMemorySessionStore
 from .skills import (
     Skill, SkillBank, SkillState, SkillType, SkillManifest,
+    SkillPreamble, SkillChain, SkillSuggestor, SkillSuggestion,
     FailureCluster, PERSISTENCE_VERSION,
 )
+from .telemetry import TelemetryEvent, TelemetryWriter, TelemetryReader
 from .ontology import (
     OntologyTerm, OntologyRelation, OntologyBundle,
     OntologyRegistry, OntologyGateMode, OntologyViolation, ValidationReport,
@@ -52,7 +54,7 @@ from .memory import MemoryStore, Memory
 from .streaming import StreamingAdapter, StreamCollector, streaming_print
 from .durable import DurableCheckpoint
 from .tracing import DetailedTracer, Trace, TraceNode
-from .run_machine import RunMachine, RunState, Run, RunConfig, ProofBundle, StateTransition, ReviewGate, ReviewResult
+from .run_machine import RunMachine, RunState, Run, RunConfig, ProofBundle, StateTransition, ReviewGate, ReviewResult, SpecGate
 from .workspace import WorkspaceManager, Workspace
 from .tracker import TrackerAdapter, TriggerEvent, TriggerFilter, LabelFilter
 from .supervisor import Supervisor, SupervisorConfig
@@ -65,3 +67,17 @@ from .skill_eval import SkillEvaluator, SkillEvalReport, SkillDelta, evaluate_sk
 from .context_diversity import ContextDiversityScorer, exclude_self_context, diversity_report
 from .vllm_presets import get_preset, list_presets, vllm_optimized, PRESETS
 from .attention import AttentionMap, AttentionMapBuilder, softmax, rmsnorm_score
+from .review import (
+    ReviewRole, ReviewStage, ReviewPipeline, ReviewPipelineResult, ReviewResult as PipelineReviewResult,
+)
+from .context_filter import ContextFilter, ContextPolicy
+from .safety import CarefulGuard, FreezeGuard, GuardChain, GuardAction, GuardResult
+from .qa import (
+    IssueSeverity, IssueCategory, QAIssue, HealthScore, QAReport, QAReviewGate,
+)
+from .retro import Retro, RetroReport
+from .ship import ShipPipeline, ShipConfig, ShipStage, ShipStatus, ShipResult, ShipCheckpoint
+from .templates import (
+    Template, TemplateSection, TemplateRenderer,
+    QA_REPORT, TODO_LIST, DESIGN_REVIEW, RETRO_REPORT,
+)
