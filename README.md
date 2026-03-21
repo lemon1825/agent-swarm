@@ -2,8 +2,8 @@
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen?style=flat-square" alt="Zero Dependencies">
   <img src="https://img.shields.io/badge/size-%3C1MB-blue?style=flat-square" alt="Size">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License">
-  <img src="https://img.shields.io/badge/tests-491%20passed-success?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat-square" alt="FSL-1.1-ALv2 License">
+  <img src="https://img.shields.io/badge/tests-643%20passed-success?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/LOC-11.1K-informational?style=flat-square" alt="Lines of Code">
 </p>
 
