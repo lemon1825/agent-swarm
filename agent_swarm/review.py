@@ -1,8 +1,7 @@
 """Multi-Stage Review Pipeline for Agent Swarm.
 
-Inspired by Superpowers 2-Stage Review + gstack CEO/Eng/Design 3-stage review.
-Provides configurable multi-stage review with concurrent gate execution,
-retry logic, skip conditions, and escalation support.
+Configurable multi-stage review with concurrent gate execution,
+retry logic, skip conditions, convergence detection, and escalation support.
 """
 from __future__ import annotations
 

@@ -1,6 +1,5 @@
 """Context Isolation for Agent Swarm.
 
-Inspired by Superpowers Subagent Context Isolation principle.
 Limits context sent to agents based on configurable policies.
 
 Extended with XSA (Exclusive Self Attention, Zhai 2026, arXiv:2603.09078):

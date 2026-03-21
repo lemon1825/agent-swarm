@@ -1,7 +1,7 @@
 """Safety Guards for Agent Swarm.
 
-Inspired by gstack careful/freeze/guard patterns.
 Detects and blocks destructive operations before execution.
+Supports pattern-based blocking, path freezing, and guard chaining.
 """
 from __future__ import annotations
 import re

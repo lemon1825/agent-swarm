@@ -1,4 +1,4 @@
-"""Detailed Tracing — LangSmith-grade execution visibility.
+"""Detailed Tracing — production-grade execution visibility.
 
 Zero dependencies. Records every step of agent execution with
 timing, token usage, cost, inputs/outputs, and dependency chain.
@@ -167,7 +167,7 @@ class Trace:
 
 
 class DetailedTracer:
-    """LangSmith-grade tracer that integrates with EventBus."""
+    """Production-grade tracer that integrates with EventBus."""
 
     def __init__(self):
         self._trace = Trace()
@@ -392,8 +392,7 @@ def _to_otel_attrs(attrs: Dict[str, Any]) -> List[Dict]:
 class TraceExporter:
     """Export agent traces to OTel-compatible JSON format.
 
-    Inspired by NVIDIA NeMo Agent Toolkit's observability layer.
-    Converts DetailedTracer traces to OTel format for Jaeger/Zipkin.
+    Converts DetailedTracer traces to OTel-compatible JSON for Jaeger/Zipkin.
     """
 
     @staticmethod

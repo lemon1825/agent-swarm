@@ -1,7 +1,7 @@
 """Ship Pipeline for Agent Swarm.
 
 Checkpoint-based pipeline: test -> review -> version -> changelog -> commit -> push.
-Inspired by gstack ship skill.
+Each stage is resumable via checkpoints for reliability.
 """
 from __future__ import annotations
 import time

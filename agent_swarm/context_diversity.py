@@ -1,7 +1,7 @@
 """Context Diversity — reduce self-reference bias in agent outputs.
 
-Inspired by Exclusive Self Attention (Zhai, 2026, arXiv:2603.09078):
-- SA output has high cosine similarity with self value vector (attention similarity bias)
+Applies the orthogonal exclusion principle from attention research (arXiv:2603.09078):
+- Attention output has high cosine similarity with self value vector (similarity bias)
 - Excluding self-position information improves context modeling
 - Division of labor: context aggregation vs point-wise feature transformation
 
@@ -96,7 +96,7 @@ class DiversityReport:
 class ContextDiversityScorer:
     """Score how well agents leverage cross-agent context vs echoing themselves.
 
-    Based on XSA insight: excluding self-position information
+    Core insight: excluding self-position information
     improves context modeling quality.
     """
 
@@ -286,7 +286,7 @@ def exclude_self_context(base_prompt: str, agent_outputs: Dict[str, str],
                          current_agent: str, weight_others: float = 1.5) -> str:
     """Build a prompt that de-emphasizes self-reference and emphasizes cross-agent context.
 
-    Inspired by XSA: exclude self-position information to improve context modeling.
+    Exclude self-position information to improve context modeling.
 
     Args:
         base_prompt: The base task prompt

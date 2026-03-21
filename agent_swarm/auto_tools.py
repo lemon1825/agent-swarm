@@ -6,7 +6,7 @@ Usage:
     swarm = Swarm(llm=auto_tools(openai()))
 
     # Agent will automatically use web_search, json_parse, etc.
-    result = await swarm.run("Research Cursor's latest pricing")
+    result = await swarm.run("Research AI agent market trends")
 
 The wrapper:
 1. Appends available tool descriptions to the prompt

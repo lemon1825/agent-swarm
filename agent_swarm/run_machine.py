@@ -1,4 +1,4 @@
-"""Run State Machine — Symphony-inspired implementation run lifecycle.
+"""Run State Machine — structured implementation run lifecycle.
 
 Transforms Agent Swarm from a "call-and-wait engine" into an "operational job system."
 Each run is a first-class object with a lifecycle, proof bundle, and audit trail.

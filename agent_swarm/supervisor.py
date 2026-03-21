@@ -1,4 +1,4 @@
-"""Supervisor Runtime — OTP-inspired failure isolation and worker management.
+"""Supervisor Runtime — failure isolation and worker management.
 
 Ensures one failing run doesn't take down the whole system.
 Manages concurrency, retry policies, and graceful degradation.
@@ -41,7 +41,7 @@ class SupervisorConfig:
     max_queue_size: int = 100         # Max queued runs
     pause_on_consecutive_failures: int = 5  # Pause after N consecutive failures
     health_check_interval_s: float = 30.0
-    isolation: str = "none"           # "none" or "worktree" (Cursor-style git isolation)
+    isolation: str = "none"           # "none" or "worktree" (git worktree isolation)
 
 
 @dataclass
@@ -53,7 +53,7 @@ class WorkerSlot:
 
 
 class Supervisor:
-    """OTP-inspired supervisor for Agent Swarm runs.
+    """Supervisor for Agent Swarm runs with failure isolation.
 
     - Processes queued runs with concurrency control
     - Isolates failures (one bad run can't crash others)

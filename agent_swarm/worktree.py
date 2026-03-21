@@ -1,9 +1,7 @@
 """Worktree Isolation — Git worktree management for parallel agent execution.
 
-Inspired by Cursor's Background/Cloud Agents (2025-2026):
-- Each parallel agent gets its own git worktree
-- Isolated file modifications prevent agent conflicts
-- Automatic cleanup after completion
+Each parallel agent gets its own git worktree for isolated file modifications.
+Prevents conflicts between concurrent agents with automatic cleanup.
 
 Like separate workbenches in a workshop: each craftsman (agent) has their
 own bench with their own copy of the materials. They can saw and hammer

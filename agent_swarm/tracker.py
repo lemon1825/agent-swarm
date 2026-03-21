@@ -298,11 +298,11 @@ class TrackerAdapter:
             server.serve_forever()
 
 
-# ── Automation Layer (Cursor Automations pattern) ──────────────
+# ── Automation Layer (event-driven agent triggers) ──────────────
 
 @dataclass(frozen=True)
 class AutomationRule:
-    """Event-driven automation rule (Cursor Automations pattern).
+    """Event-driven automation rule.
 
     Like a smart home rule: "when motion detected (trigger) → turn on lights (action)."
     Automation rules define what happens when specific events occur.
@@ -329,8 +329,8 @@ class _RuleState:
 class AutomationRegistry:
     """Registry of automation rules with cooldown and rate limiting.
 
-    Inspired by Cursor's Automations: always-on agents triggered by
-    events from external systems. Rules define trigger → action mappings.
+    Always-on agents triggered by events from external systems.
+    Rules define trigger → action mappings with cooldown and rate limiting.
     Runtime state (cooldown, daily counts) is kept in the registry, not on the rule.
     """
 

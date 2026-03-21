@@ -193,8 +193,8 @@ class BlueprintMetadata:
 class Blueprint:
     """A validated, versioned playbook with metadata.
 
-    Inspired by NVIDIA AI Blueprints: pre-built, customizable workflow
-    templates that are tested and validated before deployment.
+    A validated, versioned playbook with metadata. Pre-built, customizable
+    workflow templates that are tested and validated before deployment.
     """
     playbook: SOPPlaybook
     metadata: BlueprintMetadata = field(default_factory=BlueprintMetadata)
