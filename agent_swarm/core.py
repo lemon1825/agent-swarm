@@ -20,6 +20,10 @@ from .attention import (
     compress_block, build_wave_context, adaptive_budget,
 )
 try:
+    from .causal import CausalGraph
+except ImportError:  # pragma: no cover
+    CausalGraph = None
+try:
     from .safety import GuardAction
 except ImportError:
     GuardAction = None
@@ -1023,6 +1027,7 @@ class Swarm:
             "genetics": genetics_report,
             "attention_map": ctx.attention_builder.freeze() if ctx.attention_builder else AttentionMap(),
             "attention_heatmap": ctx.attention_builder.freeze().ascii_heatmap() if ctx.attention_builder and ctx.attention_builder._entries else "",
+            "causal_graph": CausalGraph.from_dag_results({r.task_id: r for r in all_r}, list(tm.values())) if CausalGraph else None,
             "tickets": [Ticket(ticket_id=r.task_id, title=r.task_id, priority="high" if r.wave == 0 else "medium",
                                assignee=r.role, status="done" if r.success else "failed",
                                actual_cost=round(r.duration_ms * 0.00001, 4),

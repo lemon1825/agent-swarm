@@ -9,6 +9,7 @@ from agent_swarm.review import (
     ReviewRole,
     ReviewStage,
 )
+from agent_swarm.convergence import ConvergenceConfig
 
 
 # ---------------------------------------------------------------------------
@@ -281,3 +282,85 @@ class TestReviewPipelineEmpty:
 
         assert result.passed is True
         assert result.stages_completed == 1
+
+
+# ---------------------------------------------------------------------------
+# Convergence Integration Tests (HRM)
+# ---------------------------------------------------------------------------
+
+class TestReviewConvergence:
+    """Tests for HRM-style convergence-gated review iteration."""
+
+    @pytest.mark.asyncio
+    async def test_convergence_stops_stable_scores(self):
+        """When scores stabilize, iteration should stop before max_iterations."""
+        call_count = {"n": 0}
+
+        async def stable_reviewer(run_id, proof, context):
+            call_count["n"] += 1
+            return ReviewResult(
+                role=ReviewRole.CODE_QUALITY, passed=False,
+                score=0.6, feedback="needs work",
+            )
+
+        stages = [
+            ReviewStage(
+                name="quality",
+                gates=[ReviewRole.CODE_QUALITY],
+                pass_threshold=0.9,  # will never pass
+                max_iterations=10,
+                convergence=ConvergenceConfig(
+                    stability_threshold=0.05,
+                    min_iterations=2,
+                    score_history_window=3,
+                ),
+            ),
+        ]
+        pipeline = ReviewPipeline(
+            stages=stages,
+            reviewers={ReviewRole.CODE_QUALITY: stable_reviewer},
+        )
+        result = await pipeline.run("conv_run", proof={})
+        # Should stop early due to convergence (scores are always 0.6)
+        assert call_count["n"] < 10
+
+    @pytest.mark.asyncio
+    async def test_no_convergence_uses_max_iterations(self):
+        """Without convergence config, standard max_iterations behavior."""
+        call_count = {"n": 0}
+
+        async def reviewer(run_id, proof, context):
+            call_count["n"] += 1
+            return ReviewResult(
+                role=ReviewRole.SECURITY, passed=False,
+                score=0.3, feedback="fail",
+            )
+
+        stages = [
+            ReviewStage(
+                name="sec",
+                gates=[ReviewRole.SECURITY],
+                pass_threshold=0.9,
+                max_iterations=3,
+                # no convergence config
+            ),
+        ]
+        pipeline = ReviewPipeline(
+            stages=stages,
+            reviewers={ReviewRole.SECURITY: reviewer},
+        )
+        result = await pipeline.run("noconv", proof={})
+        assert call_count["n"] == 3
+        assert result.passed is False
+
+    @pytest.mark.asyncio
+    async def test_convergence_config_on_stage(self):
+        """Verify ConvergenceConfig can be set on ReviewStage."""
+        cfg = ConvergenceConfig(max_iterations=5, stability_threshold=0.1)
+        stage = ReviewStage(
+            name="test",
+            gates=[ReviewRole.CODE_QUALITY],
+            convergence=cfg,
+        )
+        assert stage.convergence is cfg
+        assert stage.convergence.stability_threshold == 0.1

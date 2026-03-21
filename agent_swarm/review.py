@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Awaitable
+from typing import Any, Callable, Dict, List, Optional, Awaitable, Tuple
+
+from .convergence import ConvergenceConfig
 
 
 __all__ = [
@@ -31,25 +33,26 @@ class ReviewRole(Enum):
     ENGINEERING = "engineering"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ReviewResult:
     """Result from a single reviewer gate."""
     role: ReviewRole
     passed: bool
     score: float  # 0.0 to 1.0
     feedback: str = ""
-    issues: List[str] = field(default_factory=list)
+    issues: Tuple[str, ...] = ()
 
 
-@dataclass
+@dataclass(frozen=True)
 class ReviewStage:
     """A stage in the review pipeline containing one or more gates."""
     name: str
-    gates: List[ReviewRole]  # roles that review in this stage
+    gates: Tuple[ReviewRole, ...]  # roles that review in this stage
     pass_threshold: float = 0.7  # minimum average score to pass
     max_iterations: int = 3  # max retry attempts
     skip_condition: Optional[Callable[[Dict[str, Any]], bool]] = None
     require_all_pass: bool = False  # if True, ALL gates must pass individually
+    convergence: Optional[ConvergenceConfig] = None  # HRM-style convergence-gated iteration
 
 
 @dataclass
@@ -108,13 +111,26 @@ class ReviewPipeline:
                 continue
 
             stage_passed = False
-            for _iteration in range(stage.max_iterations):
+            score_history: List[float] = []
+            max_iter = stage.max_iterations
+            for _iteration in range(max_iter):
                 stage_results = await self._run_stage(stage, run_id, proof, context)
                 result.stage_results[stage.name] = stage_results
 
                 if self._stage_passes(stage, stage_results):
                     stage_passed = True
                     break
+
+                # Track score for convergence check
+                if stage_results:
+                    avg = sum(r.score for r in stage_results) / len(stage_results)
+                    score_history.append(avg)
+
+                # HRM-style convergence: stop iterating if scores stabilized
+                if stage.convergence and len(score_history) >= stage.convergence.min_iterations:
+                    if self._check_converged(score_history, stage.convergence):
+                        stage_passed = self._stage_passes(stage, stage_results)
+                        break
 
                 context[f"_feedback_{stage.name}"] = [
                     r.feedback for r in stage_results if r.feedback
@@ -167,6 +183,17 @@ class ReviewPipeline:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return [r for r in results if isinstance(r, ReviewResult)]
+
+    @staticmethod
+    def _check_converged(scores: List[float], config: ConvergenceConfig) -> bool:
+        """Check if review scores have converged (HRM-style)."""
+        if len(scores) < config.score_history_window:
+            return False
+        window = scores[-config.score_history_window:]
+        return all(
+            abs(window[i] - window[i - 1]) < config.stability_threshold
+            for i in range(1, len(window))
+        )
 
     def _stage_passes(self, stage: ReviewStage, results: List[ReviewResult]) -> bool:
         """Check whether a stage's results meet the pass criteria."""

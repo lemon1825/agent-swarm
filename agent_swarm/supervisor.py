@@ -41,6 +41,7 @@ class SupervisorConfig:
     max_queue_size: int = 100         # Max queued runs
     pause_on_consecutive_failures: int = 5  # Pause after N consecutive failures
     health_check_interval_s: float = 30.0
+    isolation: str = "none"           # "none" or "worktree" (Cursor-style git isolation)
 
 
 @dataclass
@@ -74,6 +75,13 @@ class Supervisor:
         self._on_run_complete: List[Callable] = []
         self._on_run_failed: List[Callable] = []
         self._on_pause: List[Callable] = []
+        self._worktree_mgr = None
+        if self.config.isolation == "worktree":
+            try:
+                from .worktree import WorktreeManager
+                self._worktree_mgr = WorktreeManager()
+            except ImportError:
+                logger.warning("Worktree isolation requested but worktree module unavailable")
 
     def on_complete(self, cb: Callable):
         """callback(run_id, proof)"""

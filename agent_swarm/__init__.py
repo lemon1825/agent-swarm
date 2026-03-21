@@ -38,6 +38,7 @@ from .ontology import (
 )
 from .playbooks import (
     SOPStep, SOPPlaybook, BUILTIN_PLAYBOOKS,
+    Blueprint, BlueprintMetadata, BlueprintRegistry, BLUEPRINT_REGISTRY,
 )
 from .genetics import (
     SkillGenetics, FitnessWeights, LineageRecord,
@@ -53,10 +54,10 @@ from .tools import Tool, ToolRegistry, BUILTIN_TOOLS, SAFE_TOOLS, DEFAULT_REGIST
 from .memory import MemoryStore, Memory
 from .streaming import StreamingAdapter, StreamCollector, streaming_print
 from .durable import DurableCheckpoint
-from .tracing import DetailedTracer, Trace, TraceNode
+from .tracing import DetailedTracer, Trace, TraceNode, OTelSpan, TraceExporter
 from .run_machine import RunMachine, RunState, Run, RunConfig, ProofBundle, StateTransition, ReviewGate, ReviewResult, SpecGate
 from .workspace import WorkspaceManager, Workspace
-from .tracker import TrackerAdapter, TriggerEvent, TriggerFilter, LabelFilter
+from .tracker import TrackerAdapter, TriggerEvent, TriggerFilter, LabelFilter, AutomationRule, AutomationRegistry
 from .supervisor import Supervisor, SupervisorConfig
 from .migrate import WorkspaceExporter, WorkspaceImporter, WorkspaceBundle
 from .pro_client import ProClient, ProClientError
@@ -70,7 +71,7 @@ from .attention import AttentionMap, AttentionMapBuilder, softmax, rmsnorm_score
 from .review import (
     ReviewRole, ReviewStage, ReviewPipeline, ReviewPipelineResult, ReviewResult as PipelineReviewResult,
 )
-from .context_filter import ContextFilter, ContextPolicy
+from .context_filter import ContextFilter, ContextPolicy, orthogonal_project
 from .safety import CarefulGuard, FreezeGuard, GuardChain, GuardAction, GuardResult
 from .qa import (
     IssueSeverity, IssueCategory, QAIssue, HealthScore, QAReport, QAReviewGate,
@@ -81,3 +82,8 @@ from .templates import (
     Template, TemplateSection, TemplateRenderer,
     QA_REPORT, TODO_LIST, DESIGN_REVIEW, RETRO_REPORT,
 )
+from .convergence import ConvergenceConfig, ConvergenceLoop, ConvergenceResult, AdaptiveHalt, HaltDecision
+from .worktree import WorktreeConfig, WorktreeInfo, WorktreeManager, WorktreeError
+from .causal import CausalEdge, CausalGraph, CausalAttribution, compute_influence, counterfactual_influence
+from .hrm import HRMConfig, HRMOrchestrator, HRMResult, HModuleState, LModuleState, HRMCycle
+from .playbooks import BlueprintValidator

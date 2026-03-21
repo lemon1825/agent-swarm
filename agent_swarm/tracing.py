@@ -21,8 +21,9 @@ Usage:
     tracer.export_json("trace.json")
 """
 
-__all__ = ['TraceNode', 'Trace', 'DetailedTracer']
+__all__ = ['TraceNode', 'Trace', 'DetailedTracer', 'OTelSpan', 'TraceExporter']
 import json
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -294,3 +295,175 @@ pre{{background:#0a0a0f;padding:.5rem;border-radius:4px;font-size:.75rem;overflo
 
         with open(path, "w") as f:
             f.write(html)
+
+
+# ── OpenTelemetry-Compatible Spans (NVIDIA Observability pattern) ──
+
+_OTEL_STATUS_CODES = {"UNSET": 0, "OK": 1, "ERROR": 2}
+
+
+@dataclass(frozen=True)
+class OTelSpan:
+    """OpenTelemetry-compatible span for agent tracing.
+
+    Compatible with OTel JSON format for export to Jaeger, Zipkin, etc.
+    No OTel dependency required — generates the JSON natively.
+    Immutable — use add_event() which returns a new span.
+    """
+    trace_id: str
+    span_id: str
+    parent_span_id: str = ""
+    operation_name: str = ""
+    service_name: str = "agent-swarm"
+    start_time_ns: int = 0
+    end_time_ns: int = 0
+    status: str = "UNSET"  # UNSET, OK, ERROR (OTel spec)
+    attributes: tuple = ()   # tuple of (key, value) pairs
+    events: tuple = ()       # tuple of event dicts
+
+    @staticmethod
+    def generate_id(length: int = 16) -> str:
+        """Generate a random hex ID."""
+        return secrets.token_hex(length)
+
+    @staticmethod
+    def generate_trace_id() -> str:
+        """Generate a 32-char trace ID (16 bytes)."""
+        return secrets.token_hex(16)
+
+    @staticmethod
+    def generate_span_id() -> str:
+        """Generate a 16-char span ID (8 bytes)."""
+        return secrets.token_hex(8)
+
+    def add_event(self, name: str, attributes: Optional[Dict] = None) -> "OTelSpan":
+        """Add a span event. Returns new OTelSpan (immutable)."""
+        event = {
+            "name": name,
+            "timeUnixNano": int(time.time() * 1e9),
+            "attributes": _to_otel_attrs(attributes or {}),
+        }
+        return OTelSpan(
+            trace_id=self.trace_id, span_id=self.span_id,
+            parent_span_id=self.parent_span_id,
+            operation_name=self.operation_name,
+            service_name=self.service_name,
+            start_time_ns=self.start_time_ns,
+            end_time_ns=self.end_time_ns,
+            status=self.status,
+            attributes=self.attributes,
+            events=self.events + (event,),
+        )
+
+    def to_otel_dict(self) -> Dict:
+        """Export as OTel-compatible JSON span."""
+        attrs_dict = dict(self.attributes) if self.attributes else {}
+        span = {
+            "traceId": self.trace_id,
+            "spanId": self.span_id,
+            "operationName": self.operation_name,
+            "startTimeUnixNano": self.start_time_ns,
+            "endTimeUnixNano": self.end_time_ns,
+            "status": {"code": _OTEL_STATUS_CODES.get(self.status, 0)},
+            "attributes": _to_otel_attrs(attrs_dict),
+        }
+        if self.parent_span_id:
+            span["parentSpanId"] = self.parent_span_id
+        if self.events:
+            span["events"] = list(self.events)
+        return span
+
+
+def _to_otel_attrs(attrs: Dict[str, Any]) -> List[Dict]:
+    """Convert dict to OTel attribute format."""
+    result = []
+    for k, v in attrs.items():
+        if isinstance(v, bool):
+            result.append({"key": k, "value": {"boolValue": v}})
+        elif isinstance(v, int):
+            result.append({"key": k, "value": {"intValue": str(v)}})
+        elif isinstance(v, float):
+            result.append({"key": k, "value": {"doubleValue": v}})
+        else:
+            result.append({"key": k, "value": {"stringValue": str(v)}})
+    return result
+
+
+class TraceExporter:
+    """Export agent traces to OTel-compatible JSON format.
+
+    Inspired by NVIDIA NeMo Agent Toolkit's observability layer.
+    Converts DetailedTracer traces to OTel format for Jaeger/Zipkin.
+    """
+
+    @staticmethod
+    def trace_to_otel(trace: Trace) -> Dict:
+        """Convert a Trace to OTel JSON export format."""
+        trace_id = OTelSpan.generate_trace_id()
+
+        # Root span for the entire run
+        root_span = OTelSpan(
+            trace_id=trace_id,
+            span_id=OTelSpan.generate_span_id(),
+            operation_name=f"run:{trace.mission[:50]}",
+            start_time_ns=int(trace.start_time * 1e9),
+            end_time_ns=int((trace.end_time or time.time()) * 1e9),
+            status="OK" if trace.tasks_failed == 0 else "ERROR",
+            attributes=tuple({
+                "run.id": trace.run_id,
+                "run.mission": trace.mission,
+                "run.tasks_succeeded": trace.tasks_succeeded,
+                "run.tasks_failed": trace.tasks_failed,
+                "run.total_tokens": trace.total_tokens,
+                "run.total_cost_usd": trace.total_cost_usd,
+            }.items()),
+        )
+
+        spans = [root_span]
+
+        # Child spans for each task
+        for node in trace.nodes.values():
+            if node.type.startswith("skill"):
+                continue
+            child = OTelSpan(
+                trace_id=trace_id,
+                span_id=OTelSpan.generate_span_id(),
+                parent_span_id=root_span.span_id,
+                operation_name=f"task:{node.name[:50]}",
+                start_time_ns=int((node.start_time or trace.start_time) * 1e9),
+                end_time_ns=int((node.end_time or time.time()) * 1e9),
+                status="OK" if node.success else "ERROR",
+                attributes=tuple({
+                    "task.id": node.id,
+                    "task.role": node.role,
+                    "task.wave": node.wave,
+                    "task.attempts": node.attempts,
+                    "task.tokens_total": node.tokens_total,
+                    "task.cost_usd": node.cost_usd,
+                }.items()),
+            )
+            if node.error:
+                child = child.add_event("exception", {"message": node.error})
+            spans.append(child)
+
+        return {
+            "resourceSpans": [{
+                "resource": {
+                    "attributes": _to_otel_attrs({
+                        "service.name": "agent-swarm",
+                        "service.version": "1.0.0",
+                    }),
+                },
+                "scopeSpans": [{
+                    "scope": {"name": "agent-swarm.tracer"},
+                    "spans": [s.to_otel_dict() for s in spans],
+                }],
+            }],
+        }
+
+    @staticmethod
+    def export_json(trace: Trace, path: str) -> None:
+        """Export trace as OTel-compatible JSON file."""
+        data = TraceExporter.trace_to_otel(trace)
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, default=str)

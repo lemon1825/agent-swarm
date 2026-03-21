@@ -26,7 +26,10 @@ For a full HTTP server:
     # POST http://localhost:9000/webhook → triggers runs
 """
 
-__all__ = ['TriggerEvent', 'TriggerFilter', 'LabelFilter', 'PriorityFilter', 'TrackerAdapter']
+__all__ = [
+    'TriggerEvent', 'TriggerFilter', 'LabelFilter', 'PriorityFilter',
+    'TrackerAdapter', 'AutomationRule', 'AutomationRegistry',
+]
 import asyncio
 import json
 import re
@@ -293,3 +296,155 @@ class TrackerAdapter:
             return server
         else:
             server.serve_forever()
+
+
+# ── Automation Layer (Cursor Automations pattern) ──────────────
+
+@dataclass(frozen=True)
+class AutomationRule:
+    """Event-driven automation rule (Cursor Automations pattern).
+
+    Like a smart home rule: "when motion detected (trigger) → turn on lights (action)."
+    Automation rules define what happens when specific events occur.
+    Immutable — runtime state is tracked separately in AutomationRegistry.
+    """
+    name: str
+    trigger_source: str          # "github", "linear", "schedule", "webhook", "*"
+    trigger_pattern: str = ""    # regex pattern to match event goal/ref
+    action: str = ""             # goal template for the triggered run
+    priority: int = 5
+    enabled: bool = True
+    cooldown_s: float = 60.0     # min seconds between triggers
+    max_daily: int = 100         # max triggers per day
+
+
+@dataclass
+class _RuleState:
+    """Mutable runtime state for an automation rule (internal only)."""
+    last_triggered: float = 0.0
+    daily_count: int = 0
+    daily_reset: float = 0.0
+
+
+class AutomationRegistry:
+    """Registry of automation rules with cooldown and rate limiting.
+
+    Inspired by Cursor's Automations: always-on agents triggered by
+    events from external systems. Rules define trigger → action mappings.
+    Runtime state (cooldown, daily counts) is kept in the registry, not on the rule.
+    """
+
+    def __init__(self, tracker: Optional[TrackerAdapter] = None):
+        self._rules: Dict[str, AutomationRule] = {}
+        self._state: Dict[str, _RuleState] = {}
+        self._tracker = tracker
+        self._execution_log: List[Dict] = []
+        self._lock = threading.Lock()
+
+    def register(self, rule: AutomationRule) -> None:
+        """Register an automation rule."""
+        with self._lock:
+            self._rules[rule.name] = rule
+            self._state[rule.name] = _RuleState()
+
+    def unregister(self, name: str) -> bool:
+        """Remove a rule. Returns True if found."""
+        with self._lock:
+            self._state.pop(name, None)
+            return self._rules.pop(name, None) is not None
+
+    def get(self, name: str) -> Optional[AutomationRule]:
+        """Get a rule by name."""
+        return self._rules.get(name)
+
+    def list_rules(self) -> List[AutomationRule]:
+        """List all rules."""
+        return list(self._rules.values())
+
+    def list_enabled(self) -> List[AutomationRule]:
+        """List only enabled rules."""
+        return [r for r in self._rules.values() if r.enabled]
+
+    def match(self, event: TriggerEvent) -> List[AutomationRule]:
+        """Find rules that match a trigger event."""
+        now = time.time()
+        matched = []
+
+        with self._lock:
+            for rule in self._rules.values():
+                if not rule.enabled:
+                    continue
+
+                # Source match
+                if rule.trigger_source != "*" and rule.trigger_source != event.source:
+                    continue
+
+                # Pattern match
+                if rule.trigger_pattern:
+                    text = f"{event.goal} {event.ref} {event.context}"
+                    if not re.search(rule.trigger_pattern, text, re.IGNORECASE):
+                        continue
+
+                state = self._state.setdefault(rule.name, _RuleState())
+
+                # Cooldown check
+                if now - state.last_triggered < rule.cooldown_s:
+                    continue
+
+                # Daily limit check
+                if state.daily_reset == 0.0 or now - state.daily_reset > 86400:
+                    state.daily_count = 0
+                    state.daily_reset = now
+                if state.daily_count >= rule.max_daily:
+                    continue
+
+                matched.append(rule)
+
+        return matched
+
+    def execute(self, event: TriggerEvent) -> List[Optional[str]]:
+        """Execute matching automation rules for an event.
+
+        Returns list of run_ids created (None if tracker not configured).
+        """
+        matched = self.match(event)
+        run_ids = []
+        now = time.time()
+
+        for rule in matched:
+            # Build goal from template or use event goal
+            goal = rule.action if rule.action else event.goal
+
+            # Update runtime state (thread-safe)
+            with self._lock:
+                state = self._state.setdefault(rule.name, _RuleState())
+                state.last_triggered = now
+                state.daily_count += 1
+
+            run_id = None
+            if self._tracker:
+                run_id = self._tracker.handle_schedule(
+                    goal=goal,
+                    context=event.context,
+                    priority=rule.priority,
+                )
+
+            with self._lock:
+                self._execution_log.append({
+                    "rule": rule.name,
+                    "event_source": event.source,
+                    "event_ref": event.ref,
+                    "run_id": run_id,
+                    "timestamp": now,
+                })
+            run_ids.append(run_id)
+
+        return run_ids
+
+    def execution_log(self, limit: int = 50) -> List[Dict]:
+        """Get recent execution history."""
+        return self._execution_log[-limit:]
+
+    @property
+    def count(self) -> int:
+        return len(self._rules)
